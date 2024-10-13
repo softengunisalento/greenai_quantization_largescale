@@ -1,0 +1,11 @@
+transformers
+scikit-learn
+einops
+quanto
+accelerate
+datasets
+setuptools
+bitsandbytes
+torch
+torchvision
+torchaudio

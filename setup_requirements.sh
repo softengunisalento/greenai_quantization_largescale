@@ -8,18 +8,12 @@ then
     sudo apt install python3-pip -y
 fi
 
-# List of packages to install
-packages=(
-    "transformers"
-    "quanto"
-    "accelerate"
-    "datasets"
-    "setuptools"
-    "bitsandbytes"
-    "torch"
-    "torchvision"
-    "torchaudio"
-)
+# Take list of packages from requirements.txt
+packages = ()
+while IFS = read -r line
+do
+    packages += ("$line")
+done < requirements.txt
 
 result=0
 failed_packages=()
