@@ -1,0 +1,15 @@
+services:
+    quanto_container:
+    build: .
+    runtime: nvidia  # Specify the NVIDIA runtime
+    deploy:
+        resources:
+        reservations:
+            devices:
+            - capabilities: [gpu]  # Request GPU resources
+    volumes:
+        - .:/home/matteo-aprile/models_testing  # Mount your project directory
+    environment:
+        - NVIDIA_VISIBLE_DEVICES=all  # Make all GPUs visible
+    stdin_open: true  # Keep STDIN open to allow for interaction
+    tty: true  # Enable pseudo-TTY to keep the container running interactively
