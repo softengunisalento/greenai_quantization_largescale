@@ -12,6 +12,16 @@ INPUT_TEXT = "I like you. I love you"
 LABEL_MAP = {0: "Negative", 1: "Positive"}
 
 ### Functions
+def verbose_measurements(model):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	mem_footprint = model.get_memory_footprint()
+	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(model)
+	print(f"> Original model size is: {module_sizes/1e+9} GB")
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -79,6 +89,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -86,7 +97,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the model and tokenizer
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -112,18 +123,15 @@ def main():
 	predicted_label = LABEL_MAP[predicted_class]
 	print(f"Predicted Sentiment: {predicted_label}")
 
-	# check the memory footprint of the model
-	mem_footprint = model.get_memory_footprint()
-	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
-	print(f"> Original model size is {module_sizes/1e+9} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(model)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

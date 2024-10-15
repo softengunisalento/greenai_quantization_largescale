@@ -11,6 +11,10 @@ MODEL_ID = "mixedbread-ai/mxbai-embed-large-v1"
 SENTENCE = "That is a happy dog"
 
 ### Functions
+def verbose_measurements(model_quantized):
+	""" Function to print verbose output """
+	...
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -78,6 +82,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -85,7 +90,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the tokenizer and model from sentence-transformers
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -109,12 +114,17 @@ def main():
 
 	# checking the size of the model
 	module_sizes = evaluate_size(model_quantized)
-	print(f"> Dynamically quantized model size is {module_sizes/1e+9} GB")
+	print(f"> Dynamically quantized model size is: {module_sizes/1e+9} GB")
+
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(model_quantized)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

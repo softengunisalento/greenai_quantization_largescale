@@ -11,6 +11,16 @@ MODEL_ID = "google/electra-base-discriminator"
 INPUT_TEXT = "Hello, how are you today?"
 
 ### Functions
+def verbose_measurements(model_quantized):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	mem_footprint = model_quantized.get_memory_footprint()
+	print(f"> Dynamically quantized Footprint: {mem_footprint/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(model_quantized)
+	print(f"> Dynamically quantized model size is: {module_sizes/1e+9} GB")
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -78,6 +88,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -85,7 +96,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the tokenizer and model
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -118,18 +129,15 @@ def main():
 	for token, prediction in zip(tokens, predicted_classes):
 			print(f"Token: {token}, Prediction: {'Real' if prediction == 0 else 'Replaced'}")
 
-	# check the memory footprint of the model
-	mem_footprint = model_quantized.get_memory_footprint()
-	print(f"> Dynamically quantized Footprint: {mem_footprint/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model_quantized)
-	print(f"> Dynamically quantized model size is {module_sizes/1e+9} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(model_quantized)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

@@ -15,6 +15,16 @@ HISTORICAL_DATA = "https://raw.githubusercontent.com/AileenNielsen/TimeSeriesAna
 DEVICE_MAP = "cuda"
 
 ### Functions
+def verbose_measurements(pipeline, df):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	mem_footprint = df.memory_usage(deep=True).sum()
+	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(pipeline)
+	print(f"> Original model size is: {module_sizes} GB")
+
 def evaluate_size(pipeline):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -82,6 +92,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -89,7 +100,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the model and dataset
 	pipeline = ChronosPipeline.from_pretrained(MODEL_ID, device_map=DEVICE_MAP, torch_dtype=torch.bfloat16)
@@ -112,18 +123,15 @@ def main():
 	plt.grid()
 	plt.show()
 
-	# check the memory footprint of the model
-	mem_footprint = df.memory_usage(deep=True).sum()
-	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(pipeline)
-	print(f"> Original model size is {module_sizes} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(pipeline, df)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

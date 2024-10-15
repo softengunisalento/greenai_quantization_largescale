@@ -14,6 +14,17 @@ DEVICE_MAP = "auto"
 MAX_TOKENS = 512 # Maximum number of tokens to generate
 
 ### Functions
+def verbose_measurements(model):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	mem_footprint = model.get_memory_footprint()
+	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(model)
+	print(f"> Original model size is: {module_sizes/1e+9} GB")
+
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -81,6 +92,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -88,7 +100,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the model and tokenizer
 	model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=TORCH_DTYPE, device_map=DEVICE_MAP)
@@ -104,19 +116,15 @@ def main():
 	# Decode and print the response
 	response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 	print(f"> Original response: {response}")
-
-	# check the memory footprint of the model
-	mem_footprint = model.get_memory_footprint()
-	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
-	print(f"> Original model size is {module_sizes/1e+9} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(model)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

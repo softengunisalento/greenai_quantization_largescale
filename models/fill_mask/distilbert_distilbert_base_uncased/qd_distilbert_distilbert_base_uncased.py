@@ -12,6 +12,16 @@ TEXT = "The goal of life is [MASK]."
 TOP_PREDICTIONS = 5 # Number of top predictions to show
 
 ### Functions
+def verbose_measurements(model_quantized):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	mem_footprint = model_quantized.get_memory_footprint()
+	print(f"> Dynamically quantized Footprint: {mem_footprint/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(model_quantized)
+	print(f"> Dynamically quantized model size is: {module_sizes/1e+9} GB")
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -79,6 +89,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -86,7 +97,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the tokenizer and model
 	model = AutoModelForMaskedLM.from_pretrained(MODEL_ID)
@@ -115,20 +126,18 @@ def main():
 	# Get the top predicted token IDs and their corresponding words
 	top_k_indices = torch.topk(masked_logits, TOP_PREDICTIONS).indices
 	predicted_tokens = tokenizer.convert_ids_to_tokens(top_k_indices.tolist())
-	print(f"> Dynamically quantized prediction: {predicted_tokens}")
+	print(f"> Original most liked token: {predicted_tokens[0]}")
+	print(f"> Original predictions: {predicted_tokens}")
 
-	# check the memory footprint of the model
-	mem_footprint = model_quantized.get_memory_footprint()
-	print(f"> Dynamically quantized Footprint: {mem_footprint/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model_quantized)
-	print(f"> Dynamically quantized model size is {module_sizes/1e+9} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(model_quantized)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()

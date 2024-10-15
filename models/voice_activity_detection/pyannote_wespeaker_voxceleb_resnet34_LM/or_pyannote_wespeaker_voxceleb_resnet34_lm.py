@@ -10,6 +10,16 @@ CARBON_INTENSITY = 475 # Global average carbon intensity
 MODEL_ID = "pyannote/wespeaker-voxceleb-resnet34-LM"
 
 ### Functions
+def verbose_measurements(inference, model):
+	""" Function to print verbose output """
+	# check the memory footprint of the model
+	module_sizes = evaluate_footprint(inference.model)
+	print(f"> Original Footprint: {module_sizes/1e+6} MBs")
+
+	# checking the size of the model
+	module_sizes = evaluate_size(model)
+	print(f"> Original model size is: {module_sizes/1e+9} GB")
+
 def evaluate_footprint(model):
 	""" Evaluate the footprint of the model """
 	# calculating the total number of parameters
@@ -74,6 +84,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -81,7 +92,7 @@ def arg_commandline():
 
 ### Main
 def main():
-	arg_commandline()
+	args = arg_commandline()
 
 	# Load the model and processor
 	model = Model.from_pretrained(MODEL_ID) # Use Model class from pyannote.audio
@@ -98,18 +109,15 @@ def main():
 	print(f"> Original speaker embeddings shape: {embedding_data.shape}")
 	print(f"> Original speaker embeddings: {embedding_data}")
 
-	# check the memory footprint of the model
-	module_sizes = evaluate_footprint(inference.model)
-	print(f"> Original Footprint: {module_sizes/1e+6} MBs")
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
-	print(f"> Original model size is {module_sizes/1e+9} GB")
+	if args.verbose:
+		# If -v is provided, call main with verbose output
+		verbose_measurements(inference, model)
 
 
 if __name__ == "__main__":
 	# Check if the -m option is provided
-	if arg_commandline().mgpu:
+	args = arg_commandline()
+	if args.mgpu:
 		# If -m is provided, wrap main with energy measurement
 		main_with_timing = measure_energy_consumption(main)
 		main_with_timing()
