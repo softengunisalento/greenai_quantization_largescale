@@ -35,4 +35,4 @@ with torch.no_grad():
 # Calculate the mean squared error (MSE) between the logits
 mse = torch.mean((original_logits - quantized_logits) ** 2)
 
-print(f"> Mean Squared Error between original and quantized model logits: {mse.item()}")
+print(f"{mse.item()}")

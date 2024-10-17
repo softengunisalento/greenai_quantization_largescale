@@ -42,4 +42,4 @@ quantized_hidden_states = quantized_outputs.last_hidden_state
 # Calculate the mean squared error (MSE) between the logits
 mse = torch.mean((original_hidden_states - quantized_hidden_states) ** 2)
 
-print(f"> Mean Squared Error between original and quantized model logits: {mse.item()}")
+print(f"{mse.item()}")

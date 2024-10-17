@@ -67,4 +67,4 @@ print(f"> Original image classification: {quantized_result_similarity}")
 # Calculate the mean squared error (MSE) between the logits
 mse = torch.mean((original_similarity - quantized_similarity) ** 2)
 
-print(f"> Mean Squared Error between original and quantized model logits: {mse.item()}")
+print(f"{mse.item()}")

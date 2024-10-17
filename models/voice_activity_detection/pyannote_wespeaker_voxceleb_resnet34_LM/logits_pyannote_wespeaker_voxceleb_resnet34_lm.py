@@ -46,4 +46,4 @@ quantized_tensor = torch.tensor(quantized_embedding_data)
 # Calculate the mean squared error (MSE) between the logits
 mse = torch.mean((original_tensor - quantized_tensor) ** 2)
 
-print(f"> Mean Squared Error between original and quantized model logits: {mse.item()}")
+print(f"{mse.item()}")
