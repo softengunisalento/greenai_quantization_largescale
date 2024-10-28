@@ -7,6 +7,7 @@ def extract_value(line):
     """
     Extracts the portion of the line that matches the regex '>\s*[^:]*:\s*(.*)'
     """
+    line = line.replace('%', '')
     pattern = r'>\s*[^:]*:\s*(.*)'
     match = re.search(pattern, line)
     if match:
