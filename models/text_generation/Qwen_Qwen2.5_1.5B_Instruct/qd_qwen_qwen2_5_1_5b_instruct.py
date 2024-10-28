@@ -130,6 +130,7 @@ def main():
 
 	# Decode and print the response
 	response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+	response = response.replace("\n", "")
 	print(f"> Dynamically quantized response: {response}")
 
 	if args.verbose:
