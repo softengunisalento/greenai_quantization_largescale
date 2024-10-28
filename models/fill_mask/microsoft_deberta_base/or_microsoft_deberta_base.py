@@ -102,7 +102,7 @@ def main():
 	# Load the tokenizer and model
 	model = AutoModelForMaskedLM.from_pretrained(MODEL_ID)
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-	
+
 	# Tokenize the input text
 	encoded_input = tokenizer(TEXT, return_tensors='pt')
 	print(f"> Original Text: {TEXT}")
@@ -110,16 +110,24 @@ def main():
 	# Inference:
 	with torch.no_grad(): # no need to calculate gradients (disabling to reduce memory usage, speed up computations)
 		output = model(**encoded_input)
+		logits = output.logits
 
-	# Get the predicted token IDs for the masked position
+	# Get the index of the masked token
 	masked_index = torch.where(encoded_input['input_ids'] == tokenizer.mask_token_id)[1].item()
-	logits = output.logits
-	masked_logits = logits[0, masked_index]
 
-	# Get the top predicted token IDs and their corresponding words
-	top_k_indices = torch.topk(masked_logits, TOP_PREDICTIONS).indices
+	# Get the top predictions for the masked token
+	top_k_logits = logits[0, masked_index].topk(TOP_PREDICTIONS)
+	top_k_indices = top_k_logits.indices
+	top_k_probs = torch.softmax(top_k_logits.values, dim=0)
+
+	# Decode the predicted tokens
 	predicted_tokens = tokenizer.convert_ids_to_tokens(top_k_indices.tolist())
-	print(f"> Original prediction: {predicted_tokens}")
+	print(f"Predicted Tokens: {predicted_tokens}")
+	predicted_results = [(token, prob.item()) for token, prob in zip(predicted_tokens, top_k_probs)]
+
+	# Print the results
+	for token, prob in predicted_results:
+		print(f"> Original token {token} probability: {prob}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output
