@@ -100,7 +100,7 @@ def main():
 	
 	# Generate text
 	outputs = model.generate(**inputs, max_new_tokens=20)
-	print(f"> Original Prediction:\n: {tokenizer.decode(outputs[0], skip_special_tokens=True)}\n")
+	print(f"> Original Prediction: {tokenizer.decode(outputs[0], skip_special_tokens=True)}")
 	if args.verbose:
 		# If -v is provided, call main with verbose output
 		verbose_measurements(model)

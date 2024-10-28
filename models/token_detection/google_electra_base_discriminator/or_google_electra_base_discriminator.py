@@ -120,7 +120,7 @@ def main():
 
 	# Print results excluding special tokens
 	for token, prediction in zip(tokens, predicted_classes):
-			print(f"Token: {token}, Prediction: {'Real' if prediction == 0 else 'Replaced'}")
+		print(f"> Original token {token} prediction: {'Real' if prediction == 0 else 'Replaced'}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

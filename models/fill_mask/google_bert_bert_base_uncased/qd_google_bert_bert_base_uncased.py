@@ -133,7 +133,7 @@ def main():
 
 	# Print the results
 	for token, prob in predicted_results:
-			print(f"> Token: {token}, Probability: {prob:.4f}")
+		print(f"> Dynamically quantized token {token} probability: {prob}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

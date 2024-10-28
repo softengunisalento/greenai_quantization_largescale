@@ -105,7 +105,7 @@ def main():
 
 	# Tokenize the input text
 	inputs = tokenizer(INPUT_TEXT, return_tensors="pt", padding=True, truncation=True, max_length=512)
-	print(f"Text: {INPUT_TEXT}")
+	print(f"> Text: {INPUT_TEXT}")
 
 	# Inference:
 	with torch.no_grad(): # no need to calculate gradients (disabling to reduce memory usage, speed up computations)
@@ -117,11 +117,11 @@ def main():
 	# Get the predicted class
 	probabilities = torch.nn.functional.softmax(logits, dim=-1)
 	predicted_class = torch.argmax(probabilities, dim=-1).item()
-	print(f"Probabilities: {probabilities.numpy()}")
+	print(f"> Probabilities: {probabilities}")
 
 	# Map class indices to labels
 	predicted_label = LABEL_MAP[predicted_class]
-	print(f"Predicted Sentiment: {predicted_label}")
+	print(f"> Predicted Sentiment: {predicted_label}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

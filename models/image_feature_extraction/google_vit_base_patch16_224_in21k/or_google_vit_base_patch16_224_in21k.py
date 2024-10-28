@@ -114,7 +114,6 @@ def main():
 	# getting the embeddings
 	embeddings = outputs.last_hidden_state
 	print(f"> Original image embeddings shape: {embeddings.shape}")
-	print(f"> Original image embeddings: {embeddings}")
 	print(f"> Original image embeddings: {embeddings.tolist()}")
 
 	if args.verbose:

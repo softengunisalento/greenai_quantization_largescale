@@ -16,7 +16,7 @@ def verbose_measurements(pipeline):
 	""" Function to print verbose output """
 	# check the memory footprint of the model
 	mem_footprint = evaluate_footprint(pipeline)
-	print(f"> Dynamically quantized Footprint: {mem_footprint/1e+6} MBs")
+	print(f"> Original Footprint: {mem_footprint/1e+6} MBs")
 
 	# checking the size of the model
 	module_sizes = evaluate_size(pipeline)
@@ -125,7 +125,7 @@ def main():
 	image = pipeline(PROMPT).images[0]
 	image.save(IMG_PATH)
 	print(f"> Original prompt: {PROMPT}")
-	print(f"> Generated the img in: {IMG_PATH}")
+	print(f"> Original generated the img in: {IMG_PATH}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

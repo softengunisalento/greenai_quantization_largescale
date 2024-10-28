@@ -133,7 +133,7 @@ def main():
 		print(f"> Original Query: {query}")
 		similarity_scores = similarities[i]
 		for j, score in enumerate(similarity_scores):
-			print(f"	Document {j+1}: {DOCUMENTS[j]} (Score: {score:.4f})")
+			print(f"	> Document {j+1}: {DOCUMENTS[j]} (Score: {score:.4f})")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

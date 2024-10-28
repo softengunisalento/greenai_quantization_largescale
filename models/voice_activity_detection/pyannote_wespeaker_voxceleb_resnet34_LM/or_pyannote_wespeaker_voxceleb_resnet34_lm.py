@@ -106,8 +106,7 @@ def main():
 
 	# Get the embeddings data
 	embedding_data = embeddings.data
-	print(f"> Original speaker embeddings shape: {embedding_data.shape}")
-	print(f"> Original speaker embeddings: {embedding_data}")
+	print(f"> Original speaker embeddings: tensor({embedding_data})")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

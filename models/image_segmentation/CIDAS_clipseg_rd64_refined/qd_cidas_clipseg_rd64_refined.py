@@ -128,13 +128,13 @@ def main():
 	# Convert the segmentation mask to a numpy array for visualization (reshape to 2D removing the dimensions of size 1)
 	segmentation_mask_np = segmentation_mask.cpu().numpy().squeeze()
 
-	#Resize the mask to match the original image size
+	#Resize the mask to match the Dynamically quantized image size
 	segmentation_mask_np = np.resize(segmentation_mask_np, (image.size[1], image.size[0]))
 
-	# Plot the original image and the segmentation mask
+	# Plot the Dynamically quantized image and the segmentation mask
 	plt.figure(figsize=(12, 6))
 	plt.subplot(1, 2, 1)
-	plt.title("Original Image")
+	plt.title("Dynamically quantized Image")
 	plt.imshow(image)
 	plt.axis('off')
 

@@ -115,9 +115,8 @@ def main():
 	# Compute cosine similarities
 	cosine_similarities = cosine_similarity(source_embedding, comparative_embeddings)
 	for sentence, similarity in zip(SENTENCES_TO_COMPARE, cosine_similarities[0]):
-		percentage = similarity * 100
 		print(f"> Original Sentence: {sentence}")
-		print(f"Cosine Similarity: {percentage}%\n")
+		print(f"> Cosine Similarity: {similarity}\n")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

@@ -117,8 +117,7 @@ def main():
 
 	# Get the embeddings data
 	embedding_data = embeddings.data
-	print(f"> Dynamically quantized speaker embeddings shape: {embedding_data.shape}")
-	print(f"> Dynamically quantized speaker embeddings: {embedding_data}")
+	print(f"> Dynamically quantized speaker embeddings: tensor({embedding_data})")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

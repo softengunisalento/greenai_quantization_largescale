@@ -121,6 +121,7 @@ def main():
 	# getting the embeddings
 	embeddings = outputs.last_hidden_state
 	print(f"> Dynamically quantized image embeddings: {embeddings.shape}")
+	print(f"> Dynamically quantized image embeddings: {embeddings.tolist()}")
 
 	if args.verbose:
 		# If -v is provided, call main with verbose output

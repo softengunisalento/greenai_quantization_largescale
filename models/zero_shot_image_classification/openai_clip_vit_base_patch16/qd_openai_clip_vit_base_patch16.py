@@ -122,7 +122,7 @@ def main():
 	# Get the predicted class probabilities
 	logits = outputs[0]
 	probabilities = logits.softmax(dim=1)
-	print(f"> Dynamically quantized probabilities: {probabilities.tolist()}")
+	print(f"> Dynamically quantized probabilities: {probabilities}")
 
 	# Get the predicted label
 	predicted_label = CANDIDATE_LABELS[probabilities.argmax()]
