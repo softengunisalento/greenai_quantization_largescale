@@ -5,7 +5,7 @@ from huggingface_hub import list_models
 num_models = 50
 
 # Fetch models from Hugging Face Hub
-models = list_models(sort="downloads", direction=-1, limit=50)
+models = list_models(sort="likes7d", direction=-1, limit=50)
 
 # Create a CSV file and write model names and tasks
 csv_file = 'huggingface_models.csv'

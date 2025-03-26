@@ -1,54 +1,51 @@
-Model Name,First Task,Check,Footprint MB %,or footprint,qd footprint,qs footprint,Size GB,or size,qd size,qs size,Inference s %,or inference,qd inference,qs inference,Power W,or power,qd power,qs power,Energy J,or energy,qd energy,qs energy,CO2 g,or CO2,qd CO2,qs CO2
-BAAI/bge-base-en-v1.5,feature-extraction,ok,,,,,,,,,,,,,,,,,,,,,,,,
-MIT/ast-finetuned-audioset-10-10-0.4593,audio-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-google-bert/bert-base-uncased,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-Qwen/Qwen2.5-1.5B-Instruct,text-generation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-sentence-transformers/all-MiniLM-L6-v2,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-1231czx/llama3_it_ultra_list_and_bold500,text-classification,ok local,,,,,,,,,,,,,,,,,,,,,,,,
-nesaorg/benchmark_v0,Unknown,no info,,,,,,,,,,,,,,,,,,,,,,,,
-sentence-transformers/all-mpnet-base-v2,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai/clip-vit-base-patch32,zero-shot-image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai/clip-vit-large-patch14,zero-shot-image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-google/vit-base-patch16-224-in21k,image-feature-extraction,ok,,,,,,,,,,,,,,,,,,,,,,,,
-jonatasgrosman/wav2vec2-large-xlsr-53-english,automatic-speech-recognition,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-FacebookAI/roberta-base,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-FacebookAI/xlm-roberta-large,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai/clip-vit-base-patch16,zero-shot-image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-BAAI/bge-small-en-v1.5,feature-extraction,ok,,,,,,,,,,,,,,,,,,,,,,,,
-timm/resnet50.a1_in1k,image-classification,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-FacebookAI/xlm-roberta-base,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-distilbert/distilbert-base-uncased,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai-community/gpt2,text-generation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-amazon/chronos-t5-tiny,time-series-forecasting,ok,,,,,,,,,,,,,,,,,,,,,,,,
-pyannote/wespeaker-voxceleb-resnet34-LM,voice-activity-detection,ok,,,,,,,,,,,,,,,,,,,,,,,,
-pyannote/segmentation-3.0,voice-activity-detection,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-google/gemma-2-2b,text-generation,login hf,,,,,,,,,,,,,,,,,,,,,,,,
-FacebookAI/roberta-large,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai/whisper-small,automatic-speech-recognition,ok,,,,,,,,,,,,,,,,,,,,,,,,
-stable-diffusion-v1-5/stable-diffusion-v1-5,text-to-image,ok,,,,,,,,,,,,,,,,,,,,,,,,
-pyannote/speaker-diarization-3.1,automatic-speech-recognition,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-meta-llama/Llama-3.1-405B,text-generation,login hf,,,,,,,,,,,,,,,,,,,,,,,,
-google-t5/t5-small,translation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-CIDAS/clipseg-rd64-refined,image-segmentation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-nesaorg/fc_6,Unknown,no info,,,,,,,,,,,,,,,,,,,,,,,,
-nesaorg/fc_8,Unknown,no info,,,,,,,,,,,,,,,,,,,,,,,,
-sentence-transformers/paraphrase-MiniLM-L6-v2,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-openai/clip-vit-large-patch14-336,zero-shot-image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-bigscience/bloomz-560m,text-generation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-microsoft/resnet-50,image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-nesaorg/fc_12,Unknown,no info,,,,,,,,,,,,,,,,,,,,,,,,
-google-bert/bert-base-multilingual-cased,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-distilbert/distilbert-base-uncased-finetuned-sst-2-english,text-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-myshell-ai/MeloTTS-English,text-to-speech,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-facebook/opt-125m,text-generation,ok,,,,,,,,,,,,,,,,,,,,,,,,
-mixedbread-ai/mxbai-embed-large-v1,feature-extraction,ok,,,,,,,,,,,,,,,,,,,,,,,,
-microsoft/deberta-base,fill-mask,ok,,,,,,,,,,,,,,,,,,,,,,,,
-pyannote/segmentation,voice-activity-detection,ex not work,,,,,,,,,,,,,,,,,,,,,,,,
-Falconsai/nsfw_image_detection,image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-sentence-transformers/all-MiniLM-L12-v2,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-google/electra-base-discriminator,token-detection,ok,,,,,,,,,,,,,,,,,,,,,,,,
-laion/CLIP-ViT-B-16-laion2B-s34B-b88K,zero-shot-image-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-facebook/fasttext-language-identification,text-classification,ok,,,,,,,,,,,,,,,,,,,,,,,,
-nomic-ai/nomic-embed-text-v1.5,sentence-similarity,ok,,,,,,,,,,,,,,,,,,,,,,,,
-bigscience/bloom-560m,text-generation,ok,,,,,,,,,,,,,,,,,,,,,,,,
+Model Name,First Task
+deepseek-ai/DeepSeek-V3-0324,text-generation
+manycore-research/SpatialLM-Llama-1B,text-generation
+ds4sd/SmolDocling-256M-preview,image-text-to-text
+sesame/csm-1b,text-to-speech
+ByteDance/InfiniteYou,text-to-image
+canopylabs/orpheus-3b-0.1-ft,text-to-speech
+starvector/starvector-8b-im2svg,text-generation
+mistralai/Mistral-Small-3.1-24B-Instruct-2503,image-text-to-text
+tencent/Hunyuan3D-2mv,image-to-3d
+Qwen/Qwen2.5-VL-32B-Instruct,image-text-to-text
+deepseek-ai/DeepSeek-R1,text-generation
+Qwen/Qwen2.5-Omni-7B,any-to-any
+Qwen/QwQ-32B,text-generation
+google/gemma-3-27b-it,image-text-to-text
+nvidia/canary-1b-flash,automatic-speech-recognition
+nvidia/GR00T-N1-2B,robotics
+SUFE-AIFLM-Lab/Fin-R1,Unknown
+starvector/starvector-1b-im2svg,text-generation
+black-forest-labs/FLUX.1-dev,text-to-image
+canopylabs/orpheus-3b-0.1-pretrained,text-to-speech
+nvidia/Llama-3_3-Nemotron-Super-49B-v1,text-generation
+stabilityai/stable-virtual-camera,image-to-video
+google/gemma-3-4b-it,image-text-to-text
+hexgrad/Kokoro-82M,text-to-speech
+deepseek-ai/DeepSeek-V3,text-generation
+unsloth/DeepSeek-V3-0324-GGUF,text-generation
+manycore-research/SpatialLM-Qwen-0.5B,text-generation
+LGAI-EXAONE/EXAONE-Deep-32B,text-generation
+teapotai/teapotllm,text2text-generation
+Roblox/cube3d-v0.1,Unknown
+microsoft/Phi-4-multimodal-instruct,automatic-speech-recognition
+tencent/Hunyuan3D-2,image-to-3d
+OnomaAIResearch/Illustrious-XL-v1.1,Unknown
+stabilityai/stable-diffusion-3.5-large,text-to-image
+SparkAudio/Spark-TTS-0.5B,text-to-speech
+meta-llama/Llama-3.2-1B,text-generation
+nvidia/Llama-3.1-Nemotron-Nano-8B-v1,text-generation
+bartowski/mistralai_Mistral-Small-3.1-24B-Instruct-2503-GGUF,text-generation
+Wan-AI/Wan2.1-T2V-14B,text-to-video
+kyutai/moshika-vis-pytorch-bf16,Unknown
+meta-llama/Llama-3.2-3B-Instruct,text-generation
+openai/whisper-large-v3-turbo,automatic-speech-recognition
+nvidia/canary-180m-flash,automatic-speech-recognition
+google/gemma-3-1b-it,text-generation
+spacepxl/Wan2.1-control-loras,Unknown
+trillionlabs/Trillion-7B-preview,text-generation
+Qwen/Qwen2.5-VL-7B-Instruct,image-text-to-text
+zhibinlan/LLaVE-2B,image-text-to-text
+Comfy-Org/Wan_2.1_ComfyUI_repackaged,Unknown
+stepfun-ai/stepvideo-ti2v,image-to-video
