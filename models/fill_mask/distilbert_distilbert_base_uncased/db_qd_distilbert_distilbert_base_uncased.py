@@ -9,7 +9,6 @@ import pandas as pd
 N_BYTES = 4 # Number of bytes that take each parameter (4=float32, 1=int8)
 CARBON_INTENSITY = 475 # Global average carbon intensity
 MODEL_ID = "distilbert/distilbert-base-uncased"
-TEXT = "The goal of life is [MASK]."
 TOP_PREDICTIONS = 5 # Number of top predictions to show
 PARQUET_FILE = "../train-00009-of-00041.parquet"  # Path to dataset file
 
