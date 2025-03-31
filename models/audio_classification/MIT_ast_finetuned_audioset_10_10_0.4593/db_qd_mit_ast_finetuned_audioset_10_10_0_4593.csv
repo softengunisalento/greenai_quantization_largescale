@@ -1,0 +1,28 @@
+File Name,Predicted label,Loss
+SammlungKurzerDeutscherProsa036.1309-01.mp3,Speech,0.3554912507534027
+OnkelTomsHuette11-18.mp3,Speech,0.4237632155418396
+SammlungKurzerDeutscherProsa020_64kb.mp3,Speech,0.05983489379286766
+RoemischeGeschichteBuch1Kapitel1-9_64mb.mp3,Speech,0.07521789520978928
+Esther.mp3,Speech,0.4832126200199127
+SammlungKurzerDeutscherProsa040.1304-07.mp3,Speech,0.25520914793014526
+Wallenstein-EinDramatischesGedichtPart2.mp3,Speech,0.28718888759613037
+Grossstadt_64kb.mp3,Speech,0.2595171332359314
+WilhelmMeistersLehrjahre092-106.mp3,Speech,0.2719578742980957
+WalpurgisnachtPart1.mp3,Speech,0.3103659451007843
+FraeuleinMinnaUndDerReitknecht.mp3,Speech,0.3069080412387848
+EntstehungDerKontinenteUndOzeane.mp3,Speech,0.16216051578521729
+RoemischeGeschichteBuch4Kapitel06-08_64kb.mp3,Speech,0.1560567170381546
+Daodejing.mp3,Speech,0.16405655443668365
+SammlungKurzerDeutscherProsa030_64kb.mp3,Speech,0.21798308193683624
+RoemischeGeschichteBuch5Kapitel12_64kb.mp3,Speech,0.13400614261627197
+Adventskalender2010.mp3,Speech,0.2838546931743622
+AnarchistenPart3.mp3,Speech,0.40635982155799866
+LeonceUndLena.mp3,Speech,0.13642336428165436
+BriefeepistulaeMoralesAdLucilium2Part3.mp3,Speech,0.19100907444953918
+DasBildnisDesDorianGray01-09.mp3,Speech,0.16472002863883972
+Min Loss,Max Loss,Mean Loss,Median Loss,Standard Deviation
+0.05983489379286766,0.4832126200199127,0.24310937612539246,0.25520914793014526,0.11356582358563068
+Footprint MBs,Size GB
+4.6848,0.0011712
+Inference s,Average Power Consumption W,Energy J,CO2 Emissions gr
+506.61520433425903,27.77,14068.704224362373,6.682634506572127
