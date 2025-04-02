@@ -1,14 +1,14 @@
 from transformers import AutoFeatureExtractor, ASTForAudioClassification
-import torch
-import argparse
+from tqdm import tqdm
 import os
+import csv
 import time
+import torch
 import tarfile
 import librosa
+import argparse
 import tempfile
-from tqdm import tqdm
 import pandas as pd
-import csv
 
 ### Constants
 N_BYTES = 4 # Number of bytes that take each parameter (4=float32, 1=int8)

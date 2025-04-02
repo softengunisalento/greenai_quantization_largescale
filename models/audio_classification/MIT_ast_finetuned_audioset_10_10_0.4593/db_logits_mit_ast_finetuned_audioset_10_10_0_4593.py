@@ -1,12 +1,12 @@
 from transformers import AutoFeatureExtractor, ASTForAudioClassification
-import torch
+from tqdm import tqdm
 import os
+import csv
+import torch
 import tarfile
 import librosa
 import tempfile
-from tqdm import tqdm
 import pandas as pd
-import csv
 
 ### Constants
 MODEL_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"

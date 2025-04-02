@@ -1,14 +1,15 @@
 from transformers import AutoFeatureExtractor, ASTForAudioClassification
-import torch
-import argparse
-import os
-import time
-import tarfile
-import tempfile
-import librosa
 from tqdm import tqdm
-import pandas as pd
+import os
 import csv
+import time
+import torch
+import tarfile
+import librosa
+import argparse
+import tempfile
+import pandas as pd
+
 
 ### Constants
 N_BYTES = 1 # Number of bytes that take each parameter (4=float32, 1=int8)
@@ -127,13 +128,13 @@ def calculate_co2_emissions(energy_joules):
 	energy_megajoules = energy_joules / 1e6
 	return energy_megajoules * CARBON_INTENSITY
 
-def verbose_measurements(model_quantized):
+def verbose_measurements(model):
 	""" Function to print verbose output """
 	# check the memory footprint of the model
-	mem_footprint = model_quantized.get_memory_footprint()
+	mem_footprint = model.get_memory_footprint()
 
 	# checking the size of the model
-	module_sizes = evaluate_size(model_quantized)
+	module_sizes = evaluate_size(model)
 
 	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
