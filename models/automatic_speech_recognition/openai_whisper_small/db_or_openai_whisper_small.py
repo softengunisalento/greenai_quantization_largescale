@@ -1,5 +1,4 @@
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
-import torch
 import argparse
 import os
 import time
@@ -110,17 +109,6 @@ def evaluate_size(model):
 
 	# return bytes
 	return total_params * N_BYTES
-
-def get_embeddings(sentences, tokenizer, model):
-	"""Function to get sentence embeddings"""
-	encoded_input = tokenizer(sentences, padding=True, truncation=True, return_tensors='pt')
-	# Inference:
-	with torch.no_grad(): # no need to calculate gradients (disabling to reduce memory usage, speed up computations)
-		model_output = model(**encoded_input)
-		# Perform pooling. In this case, cls pooling.
-		embeddings = model_output[0][:, 0]
-	embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-	return embeddings
 
 def get_gpu_power():
 	""" Get the power usage of the GPU """

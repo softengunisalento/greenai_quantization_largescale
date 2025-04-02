@@ -111,17 +111,6 @@ def evaluate_size(model):
 	# return bytes
 	return total_params * N_BYTES
 
-def get_embeddings(sentences, tokenizer, model):
-	"""Function to get sentence embeddings"""
-	encoded_input = tokenizer(sentences, padding=True, truncation=True, return_tensors='pt')
-	# Inference:
-	with torch.no_grad(): # no need to calculate gradients (disabling to reduce memory usage, speed up computations)
-		model_output = model(**encoded_input)
-		# Perform pooling. In this case, cls pooling.
-		embeddings = model_output[0][:, 0]
-	embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-	return embeddings
-
 def get_gpu_power():
 	""" Get the power usage of the GPU """
 	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
@@ -136,7 +125,6 @@ def calculate_co2_emissions(energy_joules):
 	# Convert joules to megajoules (1 MJ = 1e6 J)
 	energy_megajoules = energy_joules / 1e6
 	return energy_megajoules * CARBON_INTENSITY
-
 
 def verbose_measurements(model):
 	""" Function to print verbose output """
