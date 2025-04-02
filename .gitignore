@@ -3,3 +3,4 @@
 /.env
 *.parquet
 /quantization_examples
+*.csv
