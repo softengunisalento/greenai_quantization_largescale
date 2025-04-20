@@ -10,7 +10,7 @@ SORT = "likes7d"
 models = list_models(sort=SORT, direction=-1, limit=NUM_MODELS)
 
 # Create a CSV file and write model names and tasks
-with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as file:
+with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as file:
 		writer = csv.writer(file)
 		# Write the header
 		writer.writerow(['Model Name', 'First Task'])

@@ -1,13 +1,17 @@
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
-import torch
-import argparse
+from torch.utils.data import Dataset, DataLoader
 import os
+import gc
+import csv
 import time
+import torch
 import tarfile
 import librosa
+import argparse
 import tempfile
 from tqdm import tqdm
-import csv
+from codecarbon import EmissionsTracker
+
 
 ### Constants
 N_BYTES = 1 # Number of bytes that take each parameter (4=float32, 1=int8)
@@ -16,15 +20,49 @@ MODEL_ID = "openai/whisper-small"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-FILE_NAME = "openai_whisper_small"
-CSV_FILE = "db_qd_" + FILE_NAME + ".csv"
+CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+
 
 ### FunctionsFunctions
+class AudioDataset(Dataset):
+	def __init__(self, audio_files, processor, max_length, max_audio_seconds=30):
+		self.audio_files = audio_files
+		self.processor = processor
+		self.max_length = max_length
+		self.max_audio_seconds = max_audio_seconds
+
+	def __len__(self):
+		return len(self.audio_files)
+
+	def __getitem__(self, idx):
+		item = self.audio_files[idx]
+		
+		# Limit audio length to reduce memory usage
+		audio = item["array"]
+		sr = item["sampling_rate"]
+		max_samples = int(self.max_audio_seconds * sr)
+		
+		if len(audio) > max_samples:
+			audio = audio[:max_samples]
+			
+		return {
+			"array": audio,
+			"sampling_rate": sr,
+			"file_name": item["file_name"]
+		}
+
+def collate_fn(batch):
+	"""Custom collate function for DataLoader"""
+	return {
+		"array": [item["array"] for item in batch],
+		"sampling_rate": batch[0]["sampling_rate"],
+		"file_name": [item["file_name"] for item in batch]
+	}
+
 def process_tar_file(dataset_id, file_name):
 	""" Function to extract and process the specific tar file """
-	# Create a temp directory name
-	temp_dir = tempfile.gettempdir() # system temp directory
-	temp_dir = os.path.join(temp_dir, TMP_FNAME)
+	# Create a consistent temp directory name
+	temp_dir = os.path.join(tempfile.gettempdir(), TMP_FNAME)
 	extracted_dir = None
 	
 	# Check if the temp directory already exists and has content
@@ -111,11 +149,6 @@ def evaluate_size(model):
 	# return bytes
 	return total_params * N_BYTES
 
-def get_gpu_power():
-	""" Get the power usage of the GPU """
-	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
-	return float(power_usage)
-
 def calculate_energy_consumption(power_watts, time_seconds):
 	""" Calculate energy consumption in Joules """
 	return power_watts * time_seconds
@@ -126,26 +159,17 @@ def calculate_co2_emissions(energy_joules):
 	energy_megajoules = energy_joules / 1e6
 	return energy_megajoules * CARBON_INTENSITY
 
-def verbose_measurements(model):
-	""" Function to print verbose output """
-	# check the memory footprint of the model
-	mem_footprint = model.get_memory_footprint()
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
-
-	with open(CSV_FILE, mode='a', newline='') as file:
-		writer = csv.writer(file)
-		
-		# write stats
-		writer.writerow(["Footprint MBs", "Size GB"])
-		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
-
 def measure_energy_consumption(func):
 	""" Decorator to measure energy consumption of a function """
 	def wrapper(*args, **kwargs):
-		# measure the power consumption before and after inference
-		power_before = get_gpu_power()
+		# Start the CodeCarbon tracker
+		tracker = EmissionsTracker(
+			log_level="error",
+			save_to_file=False
+		)
+		tracker.start()
+		
+		# Start the inference tracker
 		start_time = time.time()
 
 		# Call the function
@@ -154,28 +178,37 @@ def measure_energy_consumption(func):
 		# measure the power consumption after inference
 		end_time = time.time()
 		inference_time = end_time - start_time
-
-		power_after = get_gpu_power()
-		average_power_usage = (power_after + power_before) / 2
-
-		energy_joules = calculate_energy_consumption(average_power_usage, inference_time)
-
-		co2_emissions = calculate_co2_emissions(energy_joules)
+		
+		# Stop the CodeCarbon tracker
+		tracker.stop()
+		
+		co2_emissions = calculate_co2_emissions(tracker._total_energy.kWh)
+		
+		# kWh to Wh
+		cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
+		gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
+		ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
+		totale_energy_Wh = tracker._total_energy.kWh * 1000
 
 		with open(CSV_FILE, mode='a', newline='') as file:
 			writer = csv.writer(file)
 			
 			# write stats
-			writer.writerow(["Inference s", "Average Power Consumption W","Energy J", "CO2 Emissions gr"])
-			writer.writerow([inference_time, average_power_usage, energy_joules, co2_emissions])
+			writer.writerow(["Inference s", "CPU Wh", "GPU Wh", "RAM Wh", "Energy Wh", "CO2 Emissions gr"])
+			writer.writerow([inference_time,cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, totale_energy_Wh, co2_emissions])
 
 		return result
 	return wrapper
 
-def csv_results(transcriptions_s_tokens, transcriptions):
+def csv_results(model, transcriptions_s_tokens, transcriptions):
 	""" Print statistics """
+	# check the memory footprint of the model
+	mem_footprint = model.get_memory_footprint()
 
-	with open(CSV_FILE, mode='a', newline='') as file:
+	# checking the size of the model
+	module_sizes = evaluate_size(model)
+
+	with open(CSV_FILE, mode='w', newline='') as file:
 		writer = csv.writer(file)
 		
 		# write files stats
@@ -183,6 +216,10 @@ def csv_results(transcriptions_s_tokens, transcriptions):
 
 		for file_name in transcriptions:
 			writer.writerow([file_name, transcriptions[file_name], transcriptions_s_tokens[file_name]])
+		
+		# write metrics
+		writer.writerow(["Footprint MBs", "Size GB"])
+		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
 
 	print(f"Results saved to {CSV_FILE}")
 
@@ -192,7 +229,13 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
-	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
+	# Add parameters for dataloader
+	parser.add_argument('-b', '--batch_size', type=int, default=512, help='size of the batches for DataLoader')
+	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
+	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
+	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
+	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
+	parser.add_argument('-a', '--max_audio_seconds', type=int, default=30, help='maximum audio length in seconds to process')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -204,14 +247,25 @@ def main():
 
 	# Load the Whisper model and processor
 	processor = WhisperProcessor.from_pretrained(MODEL_ID)
-	model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID)
+	
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	# Apply dynamic quantization to the model
-	model_quantized = torch.quantization.quantize_dynamic(
-		model,  # the model instance
-		{torch.nn.Linear},  # specify the layers to quantize
-		dtype=torch.qint8  # quantized dtype (8-bit int)
-	)
+	model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID).to(device)
+
+	if args.quantization_bits == 4:
+		model_quantized = WhisperForConditionalGeneration.from_pretrained(
+			MODEL_ID,
+			load_in_4bit=True,
+			device_map=device
+		)
+	elif args.quantization_bits == 8:
+		model_quantized = WhisperForConditionalGeneration.from_pretrained(
+			MODEL_ID,
+			load_in_8bit=True,
+			device_map=device
+		)
+	else:
+		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
 
 	# Extract audio from the specific tar file
 	print(f"Processing {SPECIFIC_FILE}...")
@@ -221,44 +275,73 @@ def main():
 		print(f"No audio files found in {SPECIFIC_FILE}")
 		exit()
 
+	# Create dataset and dataloader with reduced batch size to avoid OOM
+	dataset = AudioDataset(
+		audio_files, 
+		processor, 
+		args.max_lenght_tokenizer,
+		max_audio_seconds=args.max_audio_seconds
+	)
+	
+	dataloader = DataLoader(
+		dataset,
+		batch_size=args.batch_size, # Use a smaller batch size
+		shuffle=False, # Changed to False for more predictable memory usage
+		num_workers=args.num_workers,
+		collate_fn=collate_fn,
+		pin_memory=True if device.type == 'cuda' else False,
+		prefetch_factor=args.prefetch_factor,
+		persistent_workers=True if args.num_workers > 0 else False
+	)
+
 	transcriptions_s_tokens = {}
 	transcriptions = {}
 	
 	# Process each audio file
 	print(f"Found {len(audio_files)} audio files, processing...")
-	for idx, audio_file in enumerate(tqdm(audio_files, desc="Processing audio files")):
-		audio_array = audio_file["array"]
-		sampling_rate = audio_file["sampling_rate"]
-		file_name = audio_file["file_name"]
-		
-		# Check if the model requires resampling of the audio
-		if processor.feature_extractor.sampling_rate != sampling_rate:
-			audio_array = librosa.resample(
-				audio_array, 
-				orig_sr=sampling_rate, 
-				target_sr=processor.feature_extractor.sampling_rate
-			)
-			sampling_rate = processor.feature_extractor.sampling_rate
-		
-		# Prepare input data
-		inputs = processor(
-			audio_array, 
-			sampling_rate=sampling_rate, 
-			return_tensors="pt"
-		).input_features
-		
-		# Generate token ids
-		predicted_ids = model_quantized.generate(inputs)
+	for batch_idx, batch in enumerate(tqdm(dataloader, desc="Processing audio files")):
+		for i in range(len(batch["file_name"])):
+			try:
+				# Create a single-file batch
+				file_name = batch["file_name"][i]
+				audio_array = batch["array"][i]
+				sampling_rate = batch["sampling_rate"]
+				
+				# Check if the model requires resampling of the audio
+				if processor.feature_extractor.sampling_rate != sampling_rate:
+					audio_array = librosa.resample(
+						audio_array, 
+						orig_sr=sampling_rate, 
+						target_sr=processor.feature_extractor.sampling_rate
+					)
+					sampling_rate = processor.feature_extractor.sampling_rate
+				
+				# Prepare input data
+				inputs = processor.feature_extractor(
+					audio_array, 
+					sampling_rate=sampling_rate, 
+					return_tensors="pt"
+				).to(device)
+				
+				# Generate token ids
+				with torch.no_grad():
+					predicted_ids = model.generate(inputs.input_features)
+				
+				# Decode token ids to text
+				transcription_with_special = processor.batch_decode(predicted_ids, skip_special_tokens=False)[0]
+				transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+				
+				transcriptions_s_tokens[file_name] = transcription_with_special
+				transcriptions[file_name] = transcription
+				
+			except Exception as e:
+				print(f"Error processing {batch['file_name'][i]}: {e}")
+			
+			# Clear memory
+			torch.cuda.empty_cache()
+			gc.collect()
 
-		# Decode token ids to text
-		transcriptions_s_tokens[file_name] = processor.batch_decode(predicted_ids, skip_special_tokens=False)
-		transcriptions[file_name] = processor.batch_decode(predicted_ids, skip_special_tokens=True)
-
-	csv_results(transcriptions_s_tokens, transcriptions)
-
-	if args.verbose:
-		# If -v is provided, call main with verbose output
-		verbose_measurements(model_quantized)
+	csv_results(model, transcriptions_s_tokens, transcriptions)
 
 
 if __name__ == "__main__":

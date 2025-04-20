@@ -1,12 +1,15 @@
 from transformers import AutoTokenizer, AutoModel
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 import torch
-import argparse
 import os
+import csv
 import time
 import json
+import argparse
 import tempfile
-from tqdm import tqdm
-import csv
+from codecarbon import EmissionsTracker
+
 
 ### Constants
 N_BYTES = 1 # Number of bytes that take each parameter (4=float32, 1=int8)
@@ -15,15 +18,41 @@ MODEL_ID = "BAAI/bge-base-en-v1.5"
 DATASET_ID = "LLukas22/nq-simplified"
 TMP_FNAME = "LLukas22_nq_simplified"
 SPECIFIC_FILE = "test.json"
-FILE_NAME = "baai_bge_base_en_v1_5"
-CSV_FILE = "db_qd_" + FILE_NAME + ".csv"
+CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+
 
 ### Functions
+class QuestionDataset(Dataset):
+	def __init__(self, data, tokenizer, max_length):
+		self.data = data
+		self.tokenizer = tokenizer
+		self.max_length = max_length
+
+	def __len__(self):
+		return len(self.data)
+
+	def __getitem__(self, idx):
+		question = self.data[idx]["question"]
+		return {
+			"question": question,
+			"idx": idx
+		}
+
+def collate_fn(batch):
+	"""Custom collate function for DataLoader"""
+	questions = [item["question"] for item in batch]
+	indices = [item["idx"] for item in batch]
+	return {
+		"questions": questions,
+		"indices": indices
+	}
+
 def load_json_file(dataset_id, file_name):
 	""" Function to extract and process the specific file """
 	# Create a consistent temp directory name
 	temp_dir = os.path.join(tempfile.gettempdir(), TMP_FNAME)
 	existing_dir = None
+	file_path = None
 	
 	# Check if the temp directory already exists and has content
 	if os.path.exists(temp_dir) and os.listdir(temp_dir):
@@ -91,11 +120,6 @@ def evaluate_size(model):
 	# return bytes
 	return total_params * N_BYTES
 
-def get_gpu_power():
-	""" Get the power usage of the GPU """
-	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
-	return float(power_usage)
-
 def calculate_energy_consumption(power_watts, time_seconds):
 	""" Calculate energy consumption in Joules """
 	return power_watts * time_seconds
@@ -106,61 +130,66 @@ def calculate_co2_emissions(energy_joules):
 	energy_megajoules = energy_joules / 1e6
 	return energy_megajoules * CARBON_INTENSITY
 
-def verbose_measurements(model_quantized):
-	""" Function to print verbose output """
-	# check the memory footprint of the model
-	mem_footprint = model_quantized.get_memory_footprint()
-
-	# checking the size of the model
-	module_sizes = evaluate_size(model_quantized)
-
-	with open(CSV_FILE, mode='a', newline='') as file:
-		writer = csv.writer(file)
-		
-		# write stats
-		writer.writerow(["Footprint MBs", "Size GB"])
-		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
-
 def measure_energy_consumption(func):
-	""" Decorator to measure energy consumption of a function """
-	def wrapper(*args, **kwargs):
-		# measure the power consumption before and after inference
-		power_before = get_gpu_power()
-		start_time = time.time()
+    """ Decorator to measure energy consumption of a function """
+    def wrapper(*args, **kwargs):
+        # Start the CodeCarbon tracker
+        tracker = EmissionsTracker(
+            log_level="error",
+            save_to_file=False
+        )
+        tracker.start()
+        
+        # Start the inference tracker
+        start_time = time.time()
+        
+        # Call the function
+        result = func(*args, **kwargs)
+        
+        # Measure the after inference time
+        end_time = time.time()
+        inference_time = end_time - start_time
+        
+        # Stop the CodeCarbon tracker
+        tracker.stop()
+        
+        co2_emissions = calculate_co2_emissions(tracker._total_energy.kWh)
+        
+		# kWh to Wh
+        cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
+        gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
+        ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
+        totale_energy_Wh = tracker._total_energy.kWh * 1000
+        
+        with open(CSV_FILE, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            
+            # Write metrics
+            writer.writerow(["Inference s", "CPU Wh", "GPU Wh", "RAM Wh", "Energy Wh", "CO2 Emissions gr"])
+            writer.writerow([inference_time,cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, totale_energy_Wh, co2_emissions])
+        
+        return result
+    return wrapper
 
-		# Call the function
-		result = func(*args, **kwargs)
-
-		# measure the power consumption after inference
-		end_time = time.time()
-		inference_time = end_time - start_time
-
-		power_after = get_gpu_power()
-		average_power_usage = (power_after + power_before) / 2
-
-		energy_joules = calculate_energy_consumption(average_power_usage, inference_time)
-
-		co2_emissions = calculate_co2_emissions(energy_joules)
-
-		with open(CSV_FILE, mode='a', newline='') as file:
-			writer = csv.writer(file)
-			
-			# write stats
-			writer.writerow(["Inference s", "Average Power Consumption W","Energy J", "CO2 Emissions gr"])
-			writer.writerow([inference_time, average_power_usage, energy_joules, co2_emissions])
-
-		return result
-	return wrapper
-
-def csv_results(tensors_list):
+def csv_results(model, tensors_list):
 	""" Print statistics """
+	# check the memory footprint of the model
+	mem_footprint = model.get_memory_footprint()
+	
+	# checking the size of the model
+	module_sizes = evaluate_size(model)
 
 	with open(CSV_FILE, mode='w', newline='') as file:
 		writer = csv.writer(file)
 		writer.writerow(["Record index", "Tensors"])
 		
 		for idx in tensors_list:
-			writer.writerow([idx, tensors_list[idx]])
+			tensor_data = str(tensors_list[idx])[:100] + "..." if len(str(tensors_list[idx])) > 100 else str(tensors_list[idx])
+			writer.writerow([idx, tensor_data])
+		
+		# write metrics
+		writer.writerow(["Footprint MBs", "Size GB"])
+		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
 
 	print(f"Results saved to {CSV_FILE}")
 
@@ -170,7 +199,12 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
-	parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
+	# Add parameters for dataloader
+	parser.add_argument('-b', '--batch_size', type=int, default=512, help='size of the batches for DataLoader')
+	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
+	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
+	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
+	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -182,30 +216,61 @@ def main():
 
 	# Load the tokenizer and model from sentence-transformers
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-	model = AutoModel.from_pretrained(MODEL_ID)
-
+	
+	# Set the device
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	
 	# Apply dynamic quantization to the model
-	model_quantized = torch.quantization.quantize_dynamic(
-		model,  # the model instance
-		{torch.nn.Linear},  # specify the layers to quantize
-		dtype=torch.qint8  # quantized dtype (8-bit int)
-	)
+	if args.quantization_bits == 4:
+		model = AutoModel.from_pretrained(
+			MODEL_ID,
+			load_in_4bit=True,
+			device_map=device
+		)
+	elif args.quantization_bits == 8:
+		model = AutoModel.from_pretrained(
+			MODEL_ID,
+			load_in_8bit=True,
+			device_map=device
+		)
+	else:
+		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
 
 	# Load dataset
 	print(f"Processing {SPECIFIC_FILE}...")
-	json_files = load_json_file(DATASET_ID, SPECIFIC_FILE)
+	json_data = load_json_file(DATASET_ID, SPECIFIC_FILE)
 
-	if not json_files:
+	if not json_data:
 		print(f"No json files found in {SPECIFIC_FILE}")
 		exit()
+
+	# Create dataset and dataloader
+	dataset = QuestionDataset(json_data, tokenizer, args.max_lenght_tokenizer)
 	
+	dataloader = DataLoader(
+		dataset,
+		batch_size=args.batch_size,
+		shuffle=True, 
+		num_workers=args.num_workers,
+		collate_fn=collate_fn,
+		pin_memory=True if device == 'cuda' else False,
+		prefetch_factor=args.prefetch_factor,
+		persistent_workers=True
+	)
 
 	tensors_list = {}
+	counter = 0
 
-	# Process each json file
-	print(f"Found {len(json_files)} json files, processing...")
-	for idx, json_file in enumerate(tqdm(json_files, desc="Processing json files")):
-		question_array = json_file["question"]
+	# Process batches using DataLoader
+	model.eval()
+	print(f"Found {len(json_data)} json files, processing")
+	for batch in tqdm(dataloader, desc="Processing batches"):
+		# Skip empty batches
+		if batch is None:
+			continue
+			
+		# Move data to device (ensure correct tensor types)
+		question_array = batch["questions"]
 		
 		# Prepare input data
 		inputs = tokenizer(
@@ -213,20 +278,20 @@ def main():
 			padding=True, 
 			truncation=True, 
 			return_tensors="pt"
-		)
+		).to(device)
 		
-		# Forward pass through the original model
+		# Forward pass
 		with torch.no_grad():
-			model_output = model_quantized(**inputs)
+			model_output = model(**inputs)
 			embeddings = model_output[0][:, 0]
 		
-		tensors_list[idx] = torch.nn.functional.normalize(embeddings, p=2, dim=1).tolist()
+		tensors_list[counter] = torch.nn.functional.normalize(embeddings, p=2, dim=1).tolist()
+		counter += 1
 
-	csv_results(tensors_list)
+	csv_results(model, tensors_list)
 
-	if args.verbose:
-		# If -v is provided, call main with verbose output
-		verbose_measurements(model_quantized)
+	# Free cache
+	torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

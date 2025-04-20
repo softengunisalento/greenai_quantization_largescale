@@ -1,26 +1,55 @@
-from transformers import AutoTokenizer, AutoModel
-import torch
-import json
-import os
-import tempfile
+from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification, AutoModelForMaskedLM
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-import pandas as pd
+import os
 import csv
+import json
+import torch
+import argparse
+import tempfile
+import pandas as pd
+
 
 ### Constants
 MODEL_ID = "mixedbread-ai/mxbai-embed-large-v1"
 DATASET_ID = "LLukas22/nq-simplified"
 TMP_FNAME = "LLukas22_nq_simplified"
 SPECIFIC_FILE = "test.json"
-FILE_NAME = "mixedbread_ai_mxbai_embed_large_v1"
-CSV_FILE = "db_logits_" + FILE_NAME + ".csv"
+CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+
 
 ### Functions
+class QuestionDataset(Dataset):
+	def __init__(self, data, tokenizer, max_length):
+		self.data = data
+		self.tokenizer = tokenizer
+		self.max_length = max_length
+
+	def __len__(self):
+		return len(self.data)
+
+	def __getitem__(self, idx):
+		question = self.data[idx]["question"]
+		return {
+			"question": question,
+			"idx": idx
+		}
+
+def collate_fn(batch):
+	"""Custom collate function for DataLoader"""
+	questions = [item["question"] for item in batch]
+	indices = [item["idx"] for item in batch]
+	return {
+		"questions": questions,
+		"indices": indices
+	}
+
 def load_json_file(dataset_id, file_name):
 	""" Function to extract and process the specific file """
 	# Create a consistent temp directory name
 	temp_dir = os.path.join(tempfile.gettempdir(), TMP_FNAME)
 	existing_dir = None
+	file_path = None
 	
 	# Check if the temp directory already exists and has content
 	if os.path.exists(temp_dir) and os.listdir(temp_dir):
@@ -80,7 +109,7 @@ def load_json_file(dataset_id, file_name):
 	
 	return data
 
-def csv_results():
+def csv_results(mse_values, max_diff_values):
 	""" Print MSE statistics """
 	mse_series = pd.Series(list(mse_values.values()))
 
@@ -96,64 +125,124 @@ def csv_results():
 
 	print(f"Results saved to {CSV_FILE}")
 
-# Load the tokenizer and model from sentence-transformers
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-model = AutoModel.from_pretrained(MODEL_ID)
+def arg_commandline():
+	""" Create an argument parser object """
+	parser = argparse.ArgumentParser(description="argument parser to use custom energy consumption measurements")
 
-# Apply dynamic quantization to the model
-model_quantized = torch.quantization.quantize_dynamic(
-    model,  # the model instance
-    {torch.nn.Linear},  # specify the layers to quantize
-    dtype=torch.qint8  # quantized dtype (8-bit int)
-)
+	# Add parameters for dataloader
+	parser.add_argument('-b', '--batch_size', type=int, default=512, help='size of the batches for DataLoader')
+	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
+	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
+	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
+	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 
-# Load dataset
-print(f"Processing {SPECIFIC_FILE}...")
-json_files = load_json_file(DATASET_ID, SPECIFIC_FILE)
+	return parser.parse_args()
 
-if not json_files:
-	print(f"No json files found in {SPECIFIC_FILE}")
-	exit()
 
-# Dictionary to store MSE values for each file
-mse_values = {}
-max_diff_values = {}
-
-# Process each json file
-print(f"Found {len(json_files)} json files, processing...")
-for idx, json_file in enumerate(tqdm(json_files, desc="Processing json files")):
-	question_array = json_file["question"]
+### Main
+def main():
+	args = arg_commandline()
 	
-	# Prepare input data
-	inputs = tokenizer(
-		question_array, 
-		padding=True, 
-		truncation=True, 
-		return_tensors="pt"
+	# Load the tokenizer and model
+	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+	model = AutoModel.from_pretrained(MODEL_ID)
+	
+	# Set the device
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+	# Move the original model to the correct device
+	model = model.to(device)
+	
+	# Apply dynamic quantization to the model
+	if args.quantization_bits == 4:
+		model_quantized = AutoModelForSequenceClassification.from_pretrained(
+			MODEL_ID,
+			load_in_4bit=True,
+			device_map=device
+		)
+	elif args.quantization_bits == 8:
+		model_quantized = AutoModelForMaskedLM.from_pretrained(
+			MODEL_ID,
+			load_in_8bit=True,
+			device_map=device
+		)
+	else:
+		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
+	
+	print(f"Models loaded to {device}")
+
+	# Load dataset
+	print(f"Processing {SPECIFIC_FILE}...")
+	json_data = load_json_file(DATASET_ID, SPECIFIC_FILE)
+
+	if not json_data:
+		print(f"No data found in {SPECIFIC_FILE}")
+		exit()
+
+	# Create dataset and dataloader
+	dataset = QuestionDataset(json_data, tokenizer, args.max_lenght_tokenizer)
+	
+	dataloader = DataLoader(
+		dataset,
+		batch_size=args.batch_size,
+		shuffle=True, 
+		num_workers=args.num_workers,
+		collate_fn=collate_fn,
+		pin_memory=True if device.type == 'cuda' else False,
+		prefetch_factor=args.prefetch_factor,
+		persistent_workers=True
 	)
-	
-	# Forward pass through the original model
-	with torch.no_grad():
-		original_logits = model(**inputs)
 
-	# Extract last hidden state from the original outputs
-	original_hidden_states = original_logits.last_hidden_state
-	
-	# Forward pass through the quantized model
-	with torch.no_grad():
-		quantized_logits = model_quantized(**inputs)
+	# Dictionary to store MSE values for each file
+	mse_values = {}
+	max_diff_values = {}
 
-	# Extract last hidden state from the quantized outputs
-	quantized_hidden_states = quantized_logits.last_hidden_state
-	
-	# Calculate the mean squared error (MSE) between the logits
-	mse = torch.mean((original_hidden_states - quantized_hidden_states) ** 2).item()
-	
-	# Calculate the maximum absolute difference
-	max_diff = torch.max(torch.abs(original_hidden_states - quantized_hidden_states)).item()
-	
-	# Store values for later analysis
-	mse_values[idx] = mse
-	max_diff_values[idx] = max_diff
+	# Process batches
+	print(f"Running {len(dataset)} records inference with batch size {args.batch_size} on {device}")
 
-csv_results()
+	for batch in tqdm(dataloader, desc="Comparing model outputs"):
+		questions = batch["questions"]
+		indices = batch["indices"]
+		
+		# Tokenize input batch
+		inputs = tokenizer(
+			questions, 
+			padding=True, 
+			truncation=True, 
+			max_length=args.max_lenght_tokenizer,
+			return_tensors="pt"
+		).to(device)
+		
+		# Forward pass through both models
+		with torch.no_grad():
+			original_logits = model(**inputs)
+
+			quantized_logits = model_quantized(
+				**inputs,
+				output_hidden_states=True
+			)
+
+		# Extract last hidden states 
+		original_hidden_states = original_logits.last_hidden_state
+		quantized_hidden_states = quantized_logits.hidden_states[-1]
+		
+		# Calculate MSE and max difference for each example in the batch
+		for i, idx in enumerate(indices):
+			# Calculate the mean squared error (MSE) between the outputs
+			mse = torch.mean((original_hidden_states[i] - quantized_hidden_states[i]) ** 2).item()
+			
+			# Calculate the maximum absolute difference
+			max_diff = torch.max(torch.abs(original_hidden_states[i] - quantized_hidden_states[i])).item()
+			
+			# Store values for later analysis
+			mse_values[idx] = mse
+			max_diff_values[idx] = max_diff
+
+	csv_results(mse_values, max_diff_values)
+
+	# Free cache
+	torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+	main()
