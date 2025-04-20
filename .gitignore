@@ -4,3 +4,4 @@
 *.parquet
 /quantization_examples
 *.csv
+*.nosync
