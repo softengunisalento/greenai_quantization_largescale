@@ -31,6 +31,11 @@ def verbose_measurements(model):
 	module_sizes = evaluate_size(model)
 	print(f"> Original model size is: {module_sizes/1e+9} GB")
 
+def get_gpu_power():
+	""" Get the power usage of the GPU """
+	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
+	return power_usage
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -44,11 +49,6 @@ def mean_pooling(model_output, attention_mask):
 	token_embeddings = model_output[0]
 	input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
 	return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-
-def get_gpu_power():
-	""" Get the power usage of the GPU """
-	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
-	return float(power_usage)
 
 def calculate_energy_consumption(power_watts, time_seconds):
 	""" Calculate energy consumption in Joules """

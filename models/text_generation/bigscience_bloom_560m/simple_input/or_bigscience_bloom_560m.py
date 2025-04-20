@@ -24,6 +24,11 @@ def verbose_measurements(model):
 	print(f"> Original model size is: {module_sizes/1e+9} GB")
 
 
+def get_gpu_power():
+	""" Get the power usage of the GPU """
+	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
+	return power_usage
+
 def evaluate_size(model):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
@@ -31,11 +36,6 @@ def evaluate_size(model):
 
 	# return bytes
 	return total_params * N_BYTES
-
-def get_gpu_power():
-	""" Get the power usage of the GPU """
-	power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
-	return float(power_usage)
 
 def calculate_energy_consumption(power_watts, time_seconds):
 	""" Calculate energy consumption in Joules """

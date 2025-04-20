@@ -1,0 +1,405 @@
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+import torch
+from torch.utils.data import Dataset, DataLoader
+import argparse
+import os
+import time
+import tempfile
+from tqdm import tqdm
+import csv
+import pandas as pd
+from codecarbon import EmissionsTracker
+import random
+
+### Constants
+N_BYTES = 4 # Number of bytes that take each parameter (4=float32, 1=int8)
+CARBON_INTENSITY = 475 # Global average carbon intensity
+MODEL_ID = "distilbert/distilbert-base-uncased"
+DATASET_ID = "legacy-datasets/wikipedia"
+TMP_FNAME = "legacy_datasets_wikipedia"
+SPECIFIC_FILE = "train-00009-of-00041.parquet"
+FILE_NAME = "distilbert_distilbert_base_uncased"
+CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv" + FILE_NAME + ".csv"
+MASK_PROB = 0.15  # Probability to mask a token
+BATCH_SIZE = 512  # Adjust based on your GPU memory
+
+### Dataset and DataLoader classes
+class MaskedDataset(Dataset):
+    """Dataset for masked language modeling"""
+    
+    def __init__(self, dataframe, tokenizer, max_length=128):
+        self.tokenizer = tokenizer
+        self.texts = dataframe['text'].tolist()
+        self.max_length = max_length
+        
+    def __len__(self):
+        return len(self.texts)
+    
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        
+        # Skip if text is too short
+        if len(text.split()) < 5:
+            # Return a dummy sample that will be filtered later
+            return None
+            
+        # Tokenize the text
+        inputs = self.tokenizer(
+            text, 
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt"
+        )
+        
+        input_ids = inputs["input_ids"][0].tolist()
+        attention_mask = inputs["attention_mask"][0].tolist()
+        
+        # Don't mask special tokens
+        special_tokens = [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id]
+        
+        # Get positions of tokens that can be masked (not special tokens)
+        maskable_positions = [i for i, token_id in enumerate(input_ids) 
+                            if token_id not in special_tokens]
+        
+        # Skip if not enough maskable tokens
+        if len(maskable_positions) < 3:
+            # Return a dummy sample that will be filtered later
+            return None
+            
+        # Randomly select positions to mask based on probability
+        num_to_mask = max(1, int(len(maskable_positions) * MASK_PROB))
+        positions_to_mask = random.sample(maskable_positions, num_to_mask)
+        
+        # Create masked version and labels
+        masked_input_ids = input_ids.copy()
+        labels = [-100] * len(input_ids)  # -100 means don't compute loss for this position
+        
+        for pos in positions_to_mask:
+            # Record the original token for the label
+            labels[pos] = input_ids[pos]
+            # Replace with [MASK] token
+            masked_input_ids[pos] = self.tokenizer.mask_token_id
+        
+        # Convert to tensors (ensure long type for input_ids)
+        return {
+            "input_ids": torch.tensor(masked_input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "labels": torch.tensor(labels, dtype=torch.long),
+            "masked_text": self.tokenizer.decode(masked_input_ids)
+        }
+
+def collate_fn(batch):
+    """Custom collate function to handle None values and pad sequences"""
+    # Filter out None values
+    batch = [item for item in batch if item is not None]
+    
+    if not batch:
+        return None
+    
+    # Get max length in this batch
+    max_length = max(len(item["input_ids"]) for item in batch)
+    
+    # Prepare lists for batched data
+    input_ids = []
+    attention_masks = []
+    labels = []
+    masked_texts = []
+    
+    # Pad sequences
+    for item in batch:
+        # Get current length
+        curr_len = len(item["input_ids"])
+        padding_len = max_length - curr_len
+        
+        # Pad input_ids (ensure we're using long tensors)
+        padded_input_ids = torch.cat([
+            item["input_ids"], 
+            torch.tensor([tokenizer.pad_token_id] * padding_len, dtype=torch.long)
+        ])
+        input_ids.append(padded_input_ids)
+        
+        # Pad attention_mask
+        padded_attention_mask = torch.cat([
+            item["attention_mask"],
+            torch.zeros(padding_len, dtype=torch.long)
+        ])
+        attention_masks.append(padded_attention_mask)
+        
+        # Pad labels
+        padded_labels = torch.cat([
+            item["labels"],
+            torch.tensor([-100] * padding_len, dtype=torch.long)
+        ])
+        labels.append(padded_labels)
+        
+        # No padding needed for text
+        masked_texts.append(item["masked_text"])
+    
+    return {
+        "input_ids": torch.stack(input_ids),
+        "attention_mask": torch.stack(attention_masks),
+        "labels": torch.stack(labels),
+        "masked_texts": masked_texts
+    }
+
+### Functions
+def load_parquet_file(dataset_id, file_name):
+    """ Function to extract and process the specific parquet file """
+    # Create a consistent temp directory name
+    temp_dir = os.path.join(tempfile.gettempdir(), TMP_FNAME)
+    file_path = None
+    
+    # Check if the temp directory already exists and has content
+    if os.path.exists(temp_dir) and os.listdir(temp_dir):
+        print(f"Found existing temporary directory: {temp_dir}")
+        # Try to find the file in the existing directory
+        for root, dirs, files in os.walk(temp_dir):
+            for file in files:
+                if file == file_name:
+                    file_path = os.path.join(root, file)
+                    print(f"Found existing file: {file_path}")
+                    break
+            if file_path:
+                break
+    
+    # If no file found, we need to download
+    if file_path is None:
+        # Download the specific file with progress
+        from huggingface_hub import hf_hub_download
+
+        file_path = hf_hub_download(
+            repo_id=dataset_id,
+            filename=f"data/20220301.en/{file_name}",
+            repo_type="dataset",
+            local_files_only=False,
+            resume_download=True
+        )
+        
+        # Create the temp directory if it doesn't exist
+        os.makedirs(temp_dir, exist_ok=True)
+        print(f"Downloaded file to: {file_path}")
+    
+    if not file_path:
+        print(f"Could not find {file_name} in the directory structure")
+        exit()
+    
+    # Load the parquet data
+    try:
+        df = pd.read_parquet(file_path)
+        print(f"Loaded {len(df)} records from {file_name}")
+        return df
+    except Exception as e:
+        print(f"Error loading {file_name}: {e}")
+        return None
+
+def evaluate_size(model):
+    """ Evaluate the size of the model """
+    # calculating the total number of parameters
+    total_params = sum(p.numel() for p in model.parameters())
+
+    # return bytes
+    return total_params * N_BYTES
+
+def get_gpu_power():
+    """ Get the power usage of the GPU """
+    power_usage = os.popen('nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits').read().strip()
+    return float(power_usage)
+
+def calculate_energy_consumption(power_watts, time_seconds):
+    """ Calculate energy consumption in Joules """
+    return power_watts * time_seconds
+
+def calculate_co2_emissions(energy_joules):
+    """ Calculate CO2 emissions (in grams) """
+    # Convert joules to megajoules (1 MJ = 1e6 J)
+    energy_megajoules = energy_joules / 1e6
+    return energy_megajoules * CARBON_INTENSITY
+
+def verbose_measurements(model):
+    """ Function to print verbose output """
+    # check the memory footprint of the model
+    mem_footprint = model.get_memory_footprint()
+    
+    # checking the size of the model
+    module_sizes = evaluate_size(model)
+    
+    with open(CSV_FILE, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        
+        # write stats
+        writer.writerow(["Footprint MBs", "Size GB"])
+        writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
+
+def measure_energy_consumption(func):
+    """ Decorator to measure energy consumption of a function """
+    def wrapper(*args, **kwargs):
+        # measure the power consumption before and after inference
+        power_before = get_gpu_power()
+        start_time = time.time()
+        
+        # Call the function
+        result = func(*args, **kwargs)
+        
+        # measure the power consumption after inference
+        end_time = time.time()
+        inference_time = end_time - start_time
+        
+        power_after = get_gpu_power()
+        average_power_usage = (power_after + power_before) / 2
+        
+        energy_joules = calculate_energy_consumption(average_power_usage, inference_time)
+        
+        co2_emissions = calculate_co2_emissions(energy_joules)
+        
+        with open(CSV_FILE, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            
+            # write stats
+            writer.writerow(["Inference s", "Average Power Consumption W","Energy J", "CO2 Emissions gr"])
+            writer.writerow([inference_time, average_power_usage, energy_joules, co2_emissions])
+        
+        return result
+    return wrapper
+
+def csv_results(results_list):
+    """ Save fill-mask results to CSV """
+    
+    with open(CSV_FILE, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Example ID", "Masked Text", "Top Predictions"])
+        
+        for result in results_list:
+            writer.writerow([
+                result["id"], 
+                result["masked_text"], 
+                "; ".join([f"{p['token_str']} ({p['score']:.4f})" for p in result["predictions"]])
+            ])
+    
+    print(f"Results saved to {CSV_FILE}")
+
+def arg_commandline():
+    """ Create an argument parser object """
+    parser = argparse.ArgumentParser(description="argument parser to use custom energy consumption measurements")
+
+    # Add arguments/options
+    parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable verbose of basic measurement')
+    # Add parameters for dataloader
+    parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
+    parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
+
+    # Parse the arguments
+    return parser.parse_args()
+
+
+### Main
+def main():
+    global tokenizer  # Make tokenizer global so collate_fn can access it
+    args = arg_commandline()
+
+    # Load the tokenizer and model
+    model = AutoModelForMaskedLM.from_pretrained(MODEL_ID)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    
+    # Move to GPU if not quantized
+    device = 'cuda' if torch.cuda.is_available() and not any('quantized' in name for name, _ in model.named_modules()) else 'cpu'
+    model = model.to(device)
+    
+    # Load dataset
+    print(f"Processing {SPECIFIC_FILE}...")
+    df = load_parquet_file(DATASET_ID, SPECIFIC_FILE)
+    
+    if df is None or df.empty:
+        print(f"No data found in {SPECIFIC_FILE}")
+        exit()
+    
+    # Create dataset and dataloader
+    dataset = MaskedDataset(df, tokenizer)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True, 
+        num_workers=args.num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True if device == 'cuda' else False,
+        prefetch_factor=args.prefetch_factor,
+        persistent_workers=True
+    )
+    
+    results = []
+    counter = 0
+    
+    print(f"Running fill-mask inference with DataLoader...")
+    
+    # Process batches using DataLoader
+    model.eval()
+    for batch in tqdm(dataloader, desc="Processing batches"):
+        # Skip empty batches
+        if batch is None:
+            continue
+            
+        # Move data to device (ensure correct tensor types)
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        masked_texts = batch["masked_texts"]
+        
+        # Forward pass
+        with torch.no_grad():
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            predictions = outputs.logits
+            
+        # Process each example in the batch
+        for i, input_ids_i in enumerate(input_ids):
+            masked_text = masked_texts[i]
+            # Get positions of mask tokens (convert to CPU for iteration)
+            mask_positions = [j for j, token_id in enumerate(input_ids_i.cpu().tolist()) 
+                           if token_id == tokenizer.mask_token_id]
+            
+            # Skip if no masks found
+            if not mask_positions:
+                continue
+            
+            # For each mask position, get top 5 predictions
+            example_results = {
+                "id": counter,
+                "masked_text": masked_text,
+                "predictions": []
+            }
+            counter += 1
+            
+            for mask_pos in mask_positions:
+                # Get the predicted token scores for this position
+                mask_token_logits = predictions[i, mask_pos]
+                
+                # Get top 5 tokens
+                top_5_tokens = torch.topk(mask_token_logits, 5, dim=0)
+                
+                # Convert to a list of predictions
+                for token_id, score in zip(top_5_tokens.indices.tolist(), top_5_tokens.values.tolist()):
+                    token_str = tokenizer.decode([token_id])
+                    example_results["predictions"].append({
+                        "token_str": token_str,
+                        "token_id": token_id,
+                        "score": float(score),
+                        "position": mask_pos
+                    })
+            
+            results.append(example_results)
+    
+    csv_results(results)
+
+    if args.verbose:
+        # If -v is provided, call main with verbose output
+        verbose_measurements(model)
+
+
+if __name__ == "__main__":
+    # Check if the -m option is provided
+    args = arg_commandline()
+    if args.mgpu:
+        # If -m is provided, wrap main with energy measurement
+        main_with_timing = measure_energy_consumption(main)
+        main_with_timing()
+    else:
+        # Otherwise, just call main directly
+        main()
