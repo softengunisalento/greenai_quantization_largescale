@@ -1,0 +1,7 @@
+Text Generation Accuracy Metrics
+Metric,Original,Int4,Int8
+Exact Match Rate,1.0,0.15,0.25
+Character Similarity,1.0,0.34358241079898283,0.43328776805711816
+Exact Match Drop,N/A,0.85,0.75
+Character Drop,N/A,0.6564175892010171,0.5667122319428819
+Total examples processed,20
