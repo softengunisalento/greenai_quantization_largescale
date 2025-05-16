@@ -4,7 +4,7 @@ This academic thesis investigates the impact of Deep Learning model compression 
 
 ---
 
-## 📚 Usage
+## Usage
 
 Clone the repository and install manually:
 
