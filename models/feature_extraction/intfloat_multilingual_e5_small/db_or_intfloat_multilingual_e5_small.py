@@ -179,7 +179,7 @@ def csv_results(model, tensors_list):
 	# checking the size of the model
 	module_sizes = evaluate_size(model)
 
-	with open(CSV_FILE, mode='w', newline='') as file:
+	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
 		writer.writerow(["Record index", "Tensors"])
 		

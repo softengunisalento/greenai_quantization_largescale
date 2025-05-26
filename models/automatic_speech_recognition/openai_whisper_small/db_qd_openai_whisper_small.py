@@ -208,14 +208,14 @@ def csv_results(model, transcriptions_s_tokens, transcriptions):
 	# checking the size of the model
 	module_sizes = evaluate_size(model)
 
-	with open(CSV_FILE, mode='w', newline='') as file:
+	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
 		
 		# write files stats
-		writer.writerow(["File Name", "Transcription", "Transcription with special tokens"])
+		# writer.writerow(["File Name", "Transcription", "Transcription with special tokens"])
 
-		for file_name in transcriptions:
-			writer.writerow([file_name, transcriptions[file_name], transcriptions_s_tokens[file_name]])
+		# for file_name in transcriptions:
+		# 	writer.writerow([file_name, transcriptions[file_name], transcriptions_s_tokens[file_name]])
 		
 		# write metrics
 		writer.writerow(["Footprint MBs", "Size GB"])

@@ -117,7 +117,7 @@ def csv_results(mse_values, max_diff_values):
     """ Print MSE statistics """
     mse_series = pd.Series(list(mse_values.values()))
 
-    with open(CSV_FILE, mode='w', newline='') as file:
+    with open(CSV_FILE, mode='a', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Record index", "MSE", "Max Difference"])
         

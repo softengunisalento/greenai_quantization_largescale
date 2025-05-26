@@ -82,7 +82,7 @@ def csv_results(pipeline, df):
 	# checking the size of the model
 	module_sizes = evaluate_size(pipeline)
 
-	with open(CSV_FILE, mode='w', newline='') as file:
+	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
 		
 		# write files stats

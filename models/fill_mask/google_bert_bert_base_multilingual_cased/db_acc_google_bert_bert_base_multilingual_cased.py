@@ -388,7 +388,7 @@ def calculate_hidden_state_mse(original_model, model_int4, model_int8, dataloade
 
 def csv_results(mse_results, accuracy_results):
 	""" Print MSE statistics and accuracy results """
-	with open(CSV_FILE, mode='w', newline='') as file:
+	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
 		
 		# Write accuracy results first (most important)
