@@ -19,6 +19,16 @@ Create a venv and than:
 pip install -r requirements.txt
 ```
 
+To run the python scripts:
+
+```bash
+python3 logits_distil_whisper_distil_large_v3_5.py
+python3 or_distil_whisper_distil_large_v3_5.py -m
+python3 qd_distil_whisper_distil_large_v3_5.py -m -q 4
+python3 qd_distil_whisper_distil_large_v3_5.py -m -q 8
+```
+
+
 Here's a simple example of applying PTQ to a PyTorch model:
 
 ```python
