@@ -19,7 +19,7 @@ DATASET_ID = "ILSVRC/imagenet-1k"
 TMP_FNAME = "imagenet_val_images"
 SPECIFIC_FILE = "val_images.tar.gz"
 CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
-HF_TOKEN = "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"
+HF_TOKEN = "HF_TOKEN"
 
 
 ### Functions
