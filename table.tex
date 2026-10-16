@@ -1,0 +1,44 @@
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\multirow{2}{*}{\textbf{Task macroclass}} & \multirow{2}{*}{\textbf{Models}} & \multirow{2}{*}{\textbf{\makecell{Median energy\\(\% FP32) [IQR]}}} & \multicolumn{3}{c|}{\textbf{Outcome}} & \multirow{2}{*}{\textbf{\makecell{Median\\$|\delta|$}}} \\
+\cline{4-6}
+ & & & \textbf{\makecell{Sig.\\red.}} & \textbf{Neutral} & \textbf{\makecell{Sig.\\inc.}} & \\
+\hline
+\multicolumn{7}{|c|}{\textit{(a) INT8 vs. FP32 --- repeated executions, statistical comparison}} \\
+\hline
+Speech Processing        & 5 / 5   & 100.69 [100.22, 101.33] & 0  & 3 & 2 & 0.18 \\
+Feature Engineering      & 12 / 12   & 87.87 [67.22, 105.62] & 8  & 0 & 4 & 0.97 \\
+Sequence Transformation  & 18 / 18   & 72.38 [49.66, 108.48] & 12  & 1 & 5 & 1.00 \\
+Computer Vision          & 8 / 8   & 85.91 [83.17, 92.70] & 7  & 0 & 1 & 1.00 \\
+\hline
+\textbf{All} & \textbf{43 / 43} & \textbf{87.54 [64.59, 102.31]} & \textbf{27} & \textbf{4} & \textbf{12} & \textbf{1.00} \\
+\hline
+\multicolumn{7}{|c|}{\textit{(b) INT8 vs. FP32 --- single execution, descriptive only}} \\
+\hline
+Speech Processing        & 0 / 5  & -- & \multicolumn{4}{c|}{} \\
+Feature Engineering      & 0 / 12  & -- & \multicolumn{4}{c|}{} \\
+Sequence Transformation  & 0 / 18  & -- & \multicolumn{4}{c|}{} \\
+Computer Vision          & 0 / 8  & -- & \multicolumn{4}{c|}{} \\
+\hline
+\textbf{All} & \textbf{0 / 43} & \textbf{--} & \multicolumn{4}{c|}{} \\
+\hline
+\multicolumn{7}{|c|}{\textit{(c) INT4 vs. FP32 --- repeated executions, statistical comparison}} \\
+\hline
+Speech Processing        & 5 / 5   & 100.70 [100.35, 102.06] & 1 & 2 & 2 & 0.32 \\
+Feature Engineering      & 12 / 12   & 102.74 [101.11, 105.14] & 2 & 1 & 9 & 0.69 \\
+Sequence Transformation  & 18 / 18   & 86.64 [64.53, 102.63] & 13 & 0 & 5 & 1.00 \\
+Computer Vision          & 8 / 8   & 89.69 [84.96, 95.95] & 7 & 0 & 1 & 0.92 \\
+\hline
+\textbf{All} & \textbf{43 / 43} & \textbf{98.25 [84.44, 104.27]} & \textbf{23} & \textbf{3} & \textbf{17} & \textbf{0.95} \\
+\hline
+\multicolumn{7}{|c|}{\textit{(d) INT4 vs. FP32 --- single execution, descriptive only}} \\
+\hline
+Speech Processing        & 0 / 5  & -- & \multicolumn{4}{c|}{} \\
+Feature Engineering      & 0 / 12  & -- & \multicolumn{4}{c|}{} \\
+Sequence Transformation  & 0 / 18  & -- & \multicolumn{4}{c|}{} \\
+Computer Vision          & 0 / 8  & -- & \multicolumn{4}{c|}{} \\
+\hline
+\textbf{All} & \textbf{0 / 43} & \textbf{--} & \multicolumn{4}{c|}{} \\
+\hline
+\end{tabular}
+\end{table*}
