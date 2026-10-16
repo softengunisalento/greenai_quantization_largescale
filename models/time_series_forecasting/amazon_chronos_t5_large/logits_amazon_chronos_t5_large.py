@@ -8,7 +8,8 @@ import pandas as pd
 ### Constants
 MODEL_ID = "amazon/chronos-t5-large"
 HISTORICAL_DATA = "https://raw.githubusercontent.com/AileenNielsen/TimeSeriesAnalysisWithPython/master/data/AirPassengers.csv"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 PREDICTION_LENGTH = 12
 DEVICE = "cpu"
 

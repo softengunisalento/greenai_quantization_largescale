@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification, AutoModelForMaskedLM
+from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import os
@@ -15,7 +15,8 @@ MODEL_ID = "intfloat/multilingual-e5-large"
 DATASET_ID = "LLukas22/nq-simplified"
 TMP_FNAME = "LLukas22_nq_simplified"
 SPECIFIC_FILE = "test.json"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -149,22 +150,24 @@ def main():
 	
 	# Set the device
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	# Move the original model to the correct device
 	model = model.to(device)
 	
-	# Apply dynamic quantization to the model
+	# Apply dynamic quantization to the model - using the same AutoModel class
 	if args.quantization_bits == 4:
-		model_quantized = AutoModelForSequenceClassification.from_pretrained(
+		model_quantized = AutoModel.from_pretrained(
 			MODEL_ID,
 			load_in_4bit=True,
-			device_map=device
+			device_map="auto",
+			torch_dtype=torch.float16
 		)
 	elif args.quantization_bits == 8:
-		model_quantized = AutoModelForMaskedLM.from_pretrained(
+		model_quantized = AutoModel.from_pretrained(
 			MODEL_ID,
 			load_in_8bit=True,
-			device_map=device
+			device_map="auto"
 		)
 	else:
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
@@ -215,16 +218,13 @@ def main():
 		
 		# Forward pass through both models
 		with torch.no_grad():
-			original_logits = model(**inputs)
+			original_outputs = model(**inputs)
 
-			quantized_logits = model_quantized(
-				**inputs,
-				output_hidden_states=True
-			)
+			quantized_outputs = model_quantized(**inputs)
 
 		# Extract last hidden states 
-		original_hidden_states = original_logits.last_hidden_state
-		quantized_hidden_states = quantized_logits.hidden_states[-1]
+		original_hidden_states = original_outputs.last_hidden_state
+		quantized_hidden_states = quantized_outputs.last_hidden_state
 		
 		# Calculate MSE and max difference for each example in the batch
 		for i, idx in enumerate(indices):

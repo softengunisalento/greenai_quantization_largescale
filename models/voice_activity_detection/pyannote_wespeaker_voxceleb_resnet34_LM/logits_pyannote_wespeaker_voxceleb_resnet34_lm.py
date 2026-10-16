@@ -11,6 +11,7 @@ import tempfile
 import pandas as pd
 import gc
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 ### Constants
@@ -18,7 +19,8 @@ MODEL_ID = "pyannote/wespeaker-voxceleb-resnet34-LM"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -139,19 +141,91 @@ def process_tar_file(dataset_id, file_name):
 	
 	return audio_data
 
-def csv_results(mse_values, max_diff_values):
-	""" Print MSE statistics """
-	mse_series = pd.Series(list(mse_values.values()))
+def calculate_embedding_similarity(embedding_original, embedding_quantized):
+	"""
+	Calculate similarity between speaker embeddings from original and quantized models.
+	
+	Args:
+		embedding_original: Embedding from original model
+		embedding_quantized: Embedding from quantized model
+	
+	Returns:
+		Dictionary containing similarity metrics
+	"""
+	try:
+		# Convert to numpy if needed
+		if isinstance(embedding_original, torch.Tensor):
+			embedding_original = embedding_original.detach().cpu().numpy()
+		if isinstance(embedding_quantized, torch.Tensor):
+			embedding_quantized = embedding_quantized.detach().cpu().numpy()
+		
+		# Ensure embeddings are 1D
+		embedding_original = embedding_original.flatten()
+		embedding_quantized = embedding_quantized.flatten()
+		
+		# Calculate cosine similarity
+		cosine_sim = cosine_similarity(
+			embedding_original.reshape(1, -1), 
+			embedding_quantized.reshape(1, -1)
+		)[0, 0]
+		
+		# Calculate L2 distance (normalized)
+		l2_distance = np.linalg.norm(embedding_original - embedding_quantized)
+		max_l2 = np.linalg.norm(embedding_original) + np.linalg.norm(embedding_quantized)
+		normalized_l2_distance = l2_distance / max_l2 if max_l2 > 0 else 0
+		
+		# Calculate L2 similarity (1 - normalized distance)
+		l2_similarity = 1 - normalized_l2_distance
+		
+		# Calculate Pearson correlation
+		correlation = np.corrcoef(embedding_original, embedding_quantized)[0, 1]
+		if np.isnan(correlation):
+			correlation = 0.0
+		
+		# Calculate dot product similarity (normalized)
+		dot_product = np.dot(embedding_original, embedding_quantized)
+		norm_original = np.linalg.norm(embedding_original)
+		norm_quantized = np.linalg.norm(embedding_quantized)
+		normalized_dot_product = dot_product / (norm_original * norm_quantized) if (norm_original * norm_quantized) > 0 else 0
+		
+		return {
+			'cosine_similarity': float(cosine_sim),
+			'l2_similarity': float(l2_similarity),
+			'pearson_correlation': float(correlation),
+			'normalized_dot_product': float(normalized_dot_product),
+			'l2_distance': float(l2_distance),
+			'embedding_dimension': len(embedding_original)
+		}
+		
+	except Exception as e:
+		print(f"Error in calculate_embedding_similarity: {e}")
+		return {
+			'cosine_similarity': 0.0,
+			'l2_similarity': 0.0,
+			'pearson_correlation': 0.0,
+			'normalized_dot_product': 0.0,
+			'l2_distance': float('inf'),
+			'embedding_dimension': 0
+		}
+
+def csv_results(similarity_values):
+	""" Save similarity results to CSV """
+	similarity_series = pd.Series(list(similarity_values.values()))
 
 	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
-		# writer.writerow(["Record index", "MSE", "Max Difference"])
 		
-		# for idx in mse_values:
-		# 	writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
+		# Write headers
+		writer.writerow(["Min Cosine Similarity", "Max Cosine Similarity", "Mean Cosine Similarity", "Median Cosine Similarity", "Std Dev Cosine Similarity"])
 		
-		writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
-		writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
+		# Write overall similarity statistics
+		writer.writerow([
+			similarity_series.min(), 
+			similarity_series.max(), 
+			similarity_series.mean(), 
+			similarity_series.median(), 
+			similarity_series.std()
+		])
 
 	print(f"Results saved to {CSV_FILE}")
 
@@ -166,6 +240,7 @@ def arg_commandline():
 	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
 	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 	parser.add_argument('-a', '--max_audio_seconds', type=int, default=30, help='maximum audio length in seconds to process')
+	parser.add_argument('--similarity_metric', type=str, default='cosine', choices=['cosine', 'l2', 'correlation', 'dot_product'], help='similarity metric to use')
 
 	return parser.parse_args()
 
@@ -175,6 +250,7 @@ def main():
 	args = arg_commandline()
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	model = Model.from_pretrained(MODEL_ID).to(device)
 	inference = Inference(model)
@@ -183,13 +259,13 @@ def main():
 		model_quantized = Model.from_pretrained(
 			MODEL_ID,
 			load_in_4bit=True,
-			device_map=device
+			device_map="auto"
 		)
 	elif args.quantization_bits == 8:
 		model_quantized = Model.from_pretrained(
 			MODEL_ID,
 			load_in_8bit=True,
-			device_map=device
+			device_map="auto"
 		)
 	else:
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
@@ -224,8 +300,7 @@ def main():
 		persistent_workers=(args.num_workers > 0)
 	)
 
-	all_mse_values = {}
-	all_max_diff_values = {}
+	all_similarity_values = {}
 
 	print(f"Running inference on {len(audio_files)} audio files using {device}")
 
@@ -249,21 +324,39 @@ def main():
 					{"waveform": waveform_tensor, "sample_rate": sampling_rate}
 				).data
 
-				# Compute error metrics
-				mse = np.mean((embedding_original - embedding_quantized) ** 2)
-				max_diff = np.max(np.abs(embedding_original - embedding_quantized))
+				# Calculate embedding similarity metrics
+				metrics = calculate_embedding_similarity(
+					embedding_original, 
+					embedding_quantized
+				)
 
-				all_mse_values[file_name] = float(mse)
-				all_max_diff_values[file_name] = float(max_diff)
+				# Use the specified similarity metric
+				if args.similarity_metric == 'cosine':
+					similarity_value = metrics['cosine_similarity']
+				elif args.similarity_metric == 'l2':
+					similarity_value = metrics['l2_similarity']
+				elif args.similarity_metric == 'correlation':
+					similarity_value = metrics['pearson_correlation']
+				elif args.similarity_metric == 'dot_product':
+					similarity_value = metrics['normalized_dot_product']
+				else:
+					similarity_value = metrics['cosine_similarity']  # default
+
+				all_similarity_values[file_name] = similarity_value
+
+				# Print progress for debugging
+				print(f"Processed {file_name}: {args.similarity_metric.title()} Similarity={similarity_value:.4f}, Embedding Dim={metrics['embedding_dimension']}")
 
 			except Exception as inner_e:
 				print(f"Failed to process file {batch['file_name'][i]}: {str(inner_e)}")
+				# Add default values for failed files
+				all_similarity_values[batch['file_name'][i]] = 0.0
 
 		torch.cuda.empty_cache()
 		gc.collect()
 
 	# Save results to CSV
-	csv_results(all_mse_values, all_max_diff_values)
+	csv_results(all_similarity_values)
 
 
 if __name__ == "__main__":

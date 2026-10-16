@@ -8,6 +8,7 @@ import random
 import argparse
 import tempfile
 import pandas as pd
+import numpy as np
 
 
 ### Constants
@@ -15,8 +16,9 @@ MODEL_ID = "google-bert/bert-base-multilingual-cased"
 DATASET_ID = "legacy-datasets/wikipedia"
 TMP_FNAME = "legacy_datasets_wikipedia"
 SPECIFIC_FILE = "train-00009-of-00041.parquet"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
-MASK_PROB = 0.15  # Probability to mask a token
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
+MASK_PROB = 0.15 # Probability to mask a token
 
 
 ### Functions
@@ -184,20 +186,71 @@ def load_parquet_file(dataset_id, file_name):
 		print(f"Error loading {file_name}: {e}")
 		return None
 
-def csv_results(mse_values, max_diff_values):
-	""" Print MSE statistics """
-	mse_series = pd.Series(list(mse_values.values()))
+def calculate_topk_accuracy(original_logits, quantized_logits, labels, mask_positions, k_values=[1, 3]):
+	"""Calculate Top-k accuracy for masked token predictions"""
+	# accuracies = {f'original_top_{k}': [] for k in k_values}
+	# accuracies.update({f'quantized_top_{k}': [] for k in k_values})
+	accuracies = {f'agreement_top_{k}': [] for k in k_values}
+	
+	batch_size = original_logits.size(0)
+	
+	for i in range(batch_size):
+		if i >= len(mask_positions):
+			continue
+			
+		positions = mask_positions[i]
+		
+		for pos in positions:
+			# Get the true label for this position
+			true_label = labels[i, pos].item()
+			
+			if true_label == -100:  # Skip positions without labels
+				continue
+			
+			# Get logits for this position
+			orig_logits_pos = original_logits[i, pos]
+			quant_logits_pos = quantized_logits[i, pos]
+			
+			# Calculate Top-k accuracy for each k
+			for k in k_values:
+				# Original model Top-k predictions
+				_, orig_topk_indices = torch.topk(orig_logits_pos, k)
+				# orig_correct = true_label in orig_topk_indices.cpu().numpy()
+				# accuracies[f'original_top_{k}'].append(orig_correct)
+				
+				# Quantized model Top-k predictions
+				_, quant_topk_indices = torch.topk(quant_logits_pos, k)
+				# quant_correct = true_label in quant_topk_indices.cpu().numpy()
+				# accuracies[f'quantized_top_{k}'].append(quant_correct)
+				
+				# Agreement between models (both predict same top-k tokens)
+				orig_set = set(orig_topk_indices.cpu().numpy())
+				quant_set = set(quant_topk_indices.cpu().numpy())
+				agreement = len(orig_set.intersection(quant_set)) / k
+				accuracies[f'agreement_top_{k}'].append(agreement)
+	
+	# Calculate average accuracies
+	avg_accuracies = {}
+	for key, values in accuracies.items():
+		if values:
+			avg_accuracies[key] = np.mean(values)
+		else:
+			avg_accuracies[key] = 0.0
+	
+	return avg_accuracies
 
-	with open(CSV_FILE, mode='a', newline='') as file:
+def csv_results(accuracy_results):
+	"""Save accuracy results to CSV"""
+	# Add "average" to results
+	average = sum(accuracy_results.values()) / len(accuracy_results)
+	accuracy_results["average"] = average
+	
+	with open(CSV_FILE, mode='w', newline='') as file:
 		writer = csv.writer(file)
-		# writer.writerow(["Record index", "MSE", "Max Difference"])
 		
-		# for idx in mse_values:
-		# 	writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
-		
-		writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
-		writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
-
+		writer.writerow(accuracy_results.keys())
+		writer.writerow(accuracy_results.values())
+	
 	print(f"Results saved to {CSV_FILE}")
 
 def arg_commandline():
@@ -205,7 +258,7 @@ def arg_commandline():
 	parser = argparse.ArgumentParser(description="argument parser to use custom energy consumption measurements")
 
 	# Add parameters for dataloader
-	parser.add_argument('-b', '--batch_size', type=int, default=128, help='size of the batches for DataLoader')
+	parser.add_argument('-b', '--batch_size', type=int, default=64, help='size of the batches for DataLoader')
 	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
 	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
 	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
@@ -220,25 +273,27 @@ def main():
 	
 	global tokenizer # Make tokenizer global so collate_fn can access it
 	
-	# Load the tokenizer and model
+	# Load the tokenizer and models
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-	model = AutoModel.from_pretrained(MODEL_ID)
 	
 	# Set the device
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
-	# Move the original model to the correct device
-	model = model.to(device)
+	# Load original model for MLM
+	original_model = AutoModelForMaskedLM.from_pretrained(MODEL_ID)
+	original_model = original_model.to(device)
+	original_model.eval()
 	
-	# Apply dynamic quantization to the model
+	# Load quantized model for MLM
 	if args.quantization_bits == 4:
-		model_quantized = AutoModelForSequenceClassification.from_pretrained(
+		quantized_model = AutoModelForMaskedLM.from_pretrained(
 			MODEL_ID,
 			load_in_4bit=True,
 			device_map=device
 		)
 	elif args.quantization_bits == 8:
-		model_quantized = AutoModelForMaskedLM.from_pretrained(
+		quantized_model = AutoModelForMaskedLM.from_pretrained(
 			MODEL_ID,
 			load_in_8bit=True,
 			device_map=device
@@ -246,6 +301,7 @@ def main():
 	else:
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
 	
+	quantized_model.eval()
 	print(f"Models loaded to {device}")
 	
 	# Load dataset
@@ -270,14 +326,16 @@ def main():
 		persistent_workers=True
 	)
 	
-	# Dictionary to store MSE values for each record
-	mse_values = {}
-	max_diff_values = {}
-	counter = 0
+	# Initialize accuracy tracking
+	# all_accuracies = {f'original_top_{k}': [] for k in [1, 3]}
+	# all_accuracies.update({f'quantized_top_{k}': [] for k in [1, 3]})
+	all_accuracies = {f'agreement_top_{k}': [] for k in [1, 3]}
 	
-	print(f"Running fill-mask inference with batch size {args.batch_size} on {device}")
+	print(f"Running masked language modeling evaluation with batch size {args.batch_size} on {device}")
 	
-	for batch in tqdm(dataloader, desc="Comparing model outputs"):
+	total_masked_tokens = 0
+	
+	for batch in tqdm(dataloader, desc="Evaluating Top-k accuracy"):
 		# Skip empty batches
 		if batch is None:
 			continue
@@ -285,39 +343,49 @@ def main():
 		# Move data to device
 		input_ids = batch["input_ids"].to(device)
 		attention_mask = batch["attention_mask"].to(device)
+		labels = batch["labels"].to(device)
+		mask_positions = batch["mask_positions"]
 		
 		# Forward pass through both models
 		with torch.no_grad():
-			original_outputs = model(
+			original_outputs = original_model(
 				input_ids=input_ids,
 				attention_mask=attention_mask
 			)
 			
-			quantized_outputs = model_quantized(
+			quantized_outputs = quantized_model(
 				input_ids=input_ids,
-				attention_mask=attention_mask,
-				output_hidden_states=True
+				attention_mask=attention_mask
 			)
 		
-		# Extract last hidden states
-		original_hidden_states = original_outputs.last_hidden_state
-		quantized_hidden_states = quantized_outputs.hidden_states[-1]
+		# Get logits from both models
+		original_logits = original_outputs.logits
+		quantized_logits = quantized_outputs.logits
 		
-		# Calculate MSE and max difference for each example in the batch
-		for i in range(len(input_ids)):
-			# Calculate the mean squared error (MSE) between the outputs
-			mse = torch.mean((original_hidden_states[i] - quantized_hidden_states[i]) ** 2).item()
-			
-			# Calculate the maximum absolute difference
-			max_diff = torch.max(torch.abs(original_hidden_states[i] - quantized_hidden_states[i])).item()
-			
-			# Store values for later analysis
-			mse_values[counter] = mse
-			max_diff_values[counter] = max_diff
-			counter += 1
+		# Calculate Top-k accuracies for this batch
+		batch_accuracies = calculate_topk_accuracy(
+			original_logits, quantized_logits, labels, mask_positions
+		)
+		
+		# Count masked tokens in this batch
+		batch_masked_tokens = sum(len(positions) for positions in mask_positions)
+		total_masked_tokens += batch_masked_tokens
+		
+		# Accumulate accuracies (weighted by number of masked tokens)
+		for key, value in batch_accuracies.items():
+			if key in all_accuracies:
+				all_accuracies[key].extend([value] * batch_masked_tokens)
+	
+	# Calculate final average accuracies
+	final_accuracies = {}
+	for key, values in all_accuracies.items():
+		if values:
+			final_accuracies[key] = np.mean(values)
+		else:
+			final_accuracies[key] = 0.0
 	
 	# Save results to CSV
-	csv_results(mse_values, max_diff_values)
+	csv_results(final_accuracies)
 
 	# Free cache
 	torch.cuda.empty_cache()

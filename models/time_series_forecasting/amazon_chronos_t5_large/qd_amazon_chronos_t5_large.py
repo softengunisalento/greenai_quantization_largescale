@@ -4,6 +4,7 @@ import csv
 import time
 import torch
 import argparse
+import pandas as pd
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,7 +16,8 @@ N_BYTES = 1 # Number of bytes that take each parameter (4=float32, 1=int8)
 CARBON_INTENSITY = 475 # Global average carbon intensity
 MODEL_ID = "amazon/chronos-t5-large"
 HISTORICAL_DATA = "https://raw.githubusercontent.com/AileenNielsen/TimeSeriesAnalysisWithPython/master/data/AirPassengers.csv"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 DEVICE = "cpu"
 
 
@@ -23,7 +25,7 @@ DEVICE = "cpu"
 def evaluate_size(pipeline):
 	""" Evaluate the size of the model """
 	# calculating the total number of parameters
-	total_params = sum(p.numel() for p in pipeline.model.parameters())
+	total_params = sum(p.numel() for p in pipeline.parameters())
 
 	# return bytes
 	return total_params * N_BYTES
@@ -63,38 +65,96 @@ def measure_energy_consumption(func):
 		cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
 		gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
 		ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
-		totale_energy_Wh = tracker._total_energy.kWh * 1000
+		total_energy_Wh = tracker._total_energy.kWh * 1000
 
-		with open(CSV_FILE, mode='a', newline='') as file:
-			writer = csv.writer(file)
+		# check the memory footprint of the model
+		mem_footprint = model.get_memory_footprint()
+
+		# checking the size of the model
+		module_sizes = evaluate_size(model)
+
+		# Add energy columns to existing CSV
+		try:
+			# Check if file exists and has content
+			file_exists = os.path.exists(CSV_FILE)
+			has_content = False
 			
-			# write stats
-			writer.writerow(["Inference s", "CPU Wh", "GPU Wh", "RAM Wh", "Energy Wh", "CO2 Emissions gr"])
-			writer.writerow([inference_time,cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, totale_energy_Wh, co2_emissions])
-		
+			if file_exists:
+				try:
+					df = pd.read_csv(CSV_FILE)
+					has_content = len(df) > 0
+				except:
+					has_content = False
+			
+			# Create new row with energy data
+			energy_data = {
+				'footprint_mb': mem_footprint/1e+6,
+				'sizes_gb': module_sizes/1e+9,
+				'inference_time_s': inference_time,
+				'cpu_wh': cpu_energy_Wh,
+				'gpu_wh': gpu_energy_Wh,
+				'ram_wh': ram_energy_Wh,
+				'total_energy_wh': total_energy_Wh,
+				'co2_emissions_gr': co2_emissions
+			}
+			
+			if has_content:
+				# Read existing data and append new row
+				df = pd.read_csv(CSV_FILE)
+				
+				# Add missing columns with NaN if they don't exist
+				# for col in energy_data.keys():
+				# 	if col not in df.columns:
+				# 		df[col] = pd.NA
+				
+				# Create new row - copy last row and update with energy data
+				new_row = df.iloc[-1].copy() if len(df) > 0 else pd.Series()
+				for key, value in energy_data.items():
+					new_row[key] = value
+				
+				# Append new row
+				df = pd.concat([df, new_row.to_frame().T], ignore_index=True)
+			else:
+				# Create new DataFrame with energy data
+				df = pd.DataFrame([energy_data])
+			
+			# Write back to CSV
+			df.to_csv(CSV_FILE, index=False)
+			
+		except Exception as e:
+			print(f"Error adding energy data: {e}")
+			# Fallback to simple append
+			with open(CSV_FILE, mode='a', newline='') as file:
+				writer = csv.writer(file)
+				if not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0:
+					writer.writerow(["footprint_mb", "sizes_gb", "inference_time_s", "cpu_wh", "gpu_wh", "ram_wh", "total_energy_wh", "co2_emissions_gr"])
+				writer.writerow([inference_time, cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, total_energy_Wh, co2_emissions])
+
 		return result
 	return wrapper
 
-def csv_results(pipeline, df):
-	""" Print statistics """
-	# check the memory footprint of the model
-	mem_footprint = df.memory_usage(deep=True).sum()
+# def csv_results(pipeline, df):
+# 	""" Print statistics """
+# 	# check the memory footprint of the model
+# 	mem_footprint = df.memory_usage(deep=True).sum()
 
-	# checking the size of the model
-	module_sizes = evaluate_size(pipeline)
-
-	with open(CSV_FILE, mode='a', newline='') as file:
-		writer = csv.writer(file)
+# 	# checking the size of the model
+# 	module_sizes = evaluate_size(pipeline)
+# 	csv_exists = os.path.exists(CSV_FILE)
+# 	with open(CSV_FILE, mode='a', newline='') as file:
+# 		writer = csv.writer(file)
 		
-		# write files stats
-		writer.writerow(["File Name"])
-		writer.writerow([HISTORICAL_DATA])
+# 		# write files stats
+# 		# if not csv_exists:
+# 		# 	writer.writerow(["File Name"])
+# 		# writer.writerow([HISTORICAL_DATA])
 		
-		# write metrics
-		writer.writerow(["Footprint MBs", "Size GB"])
-		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
+# 		# write metrics
+# 		if not csv_exists:
+# 			writer.writerow(["footprint_mb", "sizes_gb"])
+# 		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
 
-	print(f"Results saved to {CSV_FILE}")
+# 	print(f"Results saved to {CSV_FILE}")
 
 def arg_commandline():
 	""" Create an argument parser object """
@@ -102,6 +162,7 @@ def arg_commandline():
 
 	# Add arguments/options
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
+	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int8')
 
 	# Parse the arguments
 	return parser.parse_args()
@@ -110,6 +171,7 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
+	global model
 
 	# Load the model and dataset
 	pipeline = ChronosPipeline.from_pretrained(MODEL_ID, device_map=DEVICE, torch_dtype=torch.float32)
@@ -125,6 +187,7 @@ def main():
 
 	# Update the pipeline model with the quantized model
 	pipeline.model = model_quantized
+	model = model_quantized.model
 
 	# make a forecast
 	context = torch.tensor(df["#Passengers"])
@@ -143,7 +206,7 @@ def main():
 	plt.grid()
 	plt.show()
 
-	csv_results(pipeline, df)
+
 
 
 if __name__ == "__main__":

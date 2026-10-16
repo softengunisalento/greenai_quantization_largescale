@@ -14,7 +14,8 @@ MODEL_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DATASET_ID = "mandarjoshi/trivia_qa"
 TMP_FNAME = "mandarjoshi_trivia_qa"
 SPECIFIC_FILE = "rc/test-00000-of-00004.parquet"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -201,6 +202,7 @@ def main():
 	
 	# Set the device
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	# Move the original model to the correct device
 	model = model.to(device)

@@ -18,8 +18,9 @@ MODEL_ID = "google/vit-base-patch16-224-in21k"
 DATASET_ID = "ILSVRC/imagenet-1k"
 TMP_FNAME = "imagenet_val_images"
 SPECIFIC_FILE = "val_images.tar.gz"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
-HF_TOKEN = "HF_TOKEN"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
+HF_TOKEN = "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"
 
 
 ### Functions
@@ -127,10 +128,6 @@ def csv_results(mse_values, max_diff_values):
 
 	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
-		writer.writerow(["File Name", "MSE", "Max Difference"])
-		
-		for idx in mse_values:
-			writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
 		
 		writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
 		writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
@@ -159,6 +156,7 @@ def main():
 	processor = AutoImageProcessor.from_pretrained(MODEL_ID)
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	model = AutoModelForImageClassification.from_pretrained(MODEL_ID).to(device)
 

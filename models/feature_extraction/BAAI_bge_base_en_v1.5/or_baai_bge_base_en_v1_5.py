@@ -7,6 +7,7 @@ import csv
 import time
 import json
 import argparse
+import pandas as pd
 import tempfile
 from codecarbon import EmissionsTracker
 
@@ -18,7 +19,8 @@ MODEL_ID = "BAAI/bge-base-en-v1.5"
 DATASET_ID = "LLukas22/nq-simplified"
 TMP_FNAME = "LLukas22_nq_simplified"
 SPECIFIC_FILE = "test.json"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -131,66 +133,125 @@ def calculate_co2_emissions(energy_joules):
 	return energy_megajoules * CARBON_INTENSITY
 
 def measure_energy_consumption(func):
-    """ Decorator to measure energy consumption of a function """
-    def wrapper(*args, **kwargs):
-        # Start the CodeCarbon tracker
-        tracker = EmissionsTracker(
-            log_level="error",
-            save_to_file=False
-        )
-        tracker.start()
-        
-        # Start the inference tracker
-        start_time = time.time()
-        
-        # Call the function
-        result = func(*args, **kwargs)
-        
-        # Measure the after inference time
-        end_time = time.time()
-        inference_time = end_time - start_time
-        
-        # Stop the CodeCarbon tracker
-        tracker.stop()
-        
-        co2_emissions = calculate_co2_emissions(tracker._total_energy.kWh)
-        
+	""" Decorator to measure energy consumption of a function """
+	def wrapper(*args, **kwargs):
+		# Start the CodeCarbon tracker
+		tracker = EmissionsTracker(
+			log_level="error",
+			save_to_file=False
+		)
+		tracker.start()
+		
+		# Start the inference tracker
+		start_time = time.time()
+
+		# Call the function
+		result = func(*args, **kwargs)
+
+		# measure the power consumption after inference
+		end_time = time.time()
+		inference_time = end_time - start_time
+		
+		# Stop the CodeCarbon tracker
+		tracker.stop()
+		
+		co2_emissions = calculate_co2_emissions(tracker._total_energy.kWh)
+		
 		# kWh to Wh
-        cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
-        gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
-        ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
-        totale_energy_Wh = tracker._total_energy.kWh * 1000
-        
-        with open(CSV_FILE, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            
-            # Write metrics
-            writer.writerow(["Inference s", "CPU Wh", "GPU Wh", "RAM Wh", "Energy Wh", "CO2 Emissions gr"])
-            writer.writerow([inference_time,cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, totale_energy_Wh, co2_emissions])
-        
-        return result
-    return wrapper
+		cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
+		gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
+		ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
+		total_energy_Wh = tracker._total_energy.kWh * 1000
 
-def csv_results(model, tensors_list):
-	""" Print statistics """
-	# check the memory footprint of the model
-	mem_footprint = model.get_memory_footprint()
+		# check the memory footprint of the model
+		mem_footprint = model.get_memory_footprint()
+
+		# checking the size of the model
+		module_sizes = evaluate_size(model)
+
+		# Add energy columns to existing CSV
+		try:
+			# Check if file exists and has content
+			file_exists = os.path.exists(CSV_FILE)
+			has_content = False
+			
+			if file_exists:
+				try:
+					df = pd.read_csv(CSV_FILE)
+					has_content = len(df) > 0
+				except:
+					has_content = False
+			
+			# Create new row with energy data
+			energy_data = {
+				'footprint_mb': mem_footprint/1e+6,
+				'sizes_gb': module_sizes/1e+9,
+				'inference_time_s': inference_time,
+				'cpu_wh': cpu_energy_Wh,
+				'gpu_wh': gpu_energy_Wh,
+				'ram_wh': ram_energy_Wh,
+				'total_energy_wh': total_energy_Wh,
+				'co2_emissions_gr': co2_emissions
+			}
+			
+			if has_content:
+				# Read existing data and append new row
+				df = pd.read_csv(CSV_FILE)
+				
+				# Add missing columns with NaN if they don't exist
+				# for col in energy_data.keys():
+				# 	if col not in df.columns:
+				# 		df[col] = pd.NA
+				
+				# Create new row - copy last row and update with energy data
+				new_row = df.iloc[-1].copy() if len(df) > 0 else pd.Series()
+				for key, value in energy_data.items():
+					new_row[key] = value
+				
+				# Append new row
+				df = pd.concat([df, new_row.to_frame().T], ignore_index=True)
+			else:
+				# Create new DataFrame with energy data
+				df = pd.DataFrame([energy_data])
+			
+			# Write back to CSV
+			df.to_csv(CSV_FILE, index=False)
+			
+		except Exception as e:
+			print(f"Error adding energy data: {e}")
+			# Fallback to simple append
+			with open(CSV_FILE, mode='a', newline='') as file:
+				writer = csv.writer(file)
+				if not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0:
+					writer.writerow(["footprint_mb", "sizes_gb", "inference_time_s", "cpu_wh", "gpu_wh", "ram_wh", "total_energy_wh", "co2_emissions_gr"])
+				writer.writerow([inference_time, cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, total_energy_Wh, co2_emissions])
+
+		return result
+	return wrapper
+
+# def csv_results(model, tensors_list):
+# 	""" Print statistics """
+# 	# check the memory footprint of the model
+# 	mem_footprint = model.get_memory_footprint()
 	
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
-
-	with open(CSV_FILE, mode='a', newline='') as file:
-		writer = csv.writer(file)
-		writer.writerow(["Record index", "Tensors"])
+# 	# checking the size of the model
+# 	module_sizes = evaluate_size(model)
+# 	csv_exists = os.path.exists(CSV_FILE)
+# 	with open(CSV_FILE, mode='a', newline='') as file:
+# 		writer = csv.writer(file)
 		
-		for idx in tensors_list:
-			writer.writerow([idx, tensors_list[idx]])
+# 		# if not csv_exists:
+# 		# 	writer.writerow(["Record index", "Tensors"])
 		
-		# write metrics
-		writer.writerow(["Footprint MBs", "Size GB"])
-		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
+# 		# for idx in tensors_list:
+# 		# 	writer.writerow([idx, tensors_list[idx]])
+		
+# 		# write metrics
+# 		if not csv_exists:
+# 			writer.writerow(["footprint_mb", "sizes_gb"])
+# 		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
 
-	print(f"Results saved to {CSV_FILE}")
+# 	print(f"Results saved to {CSV_FILE}")
 
 def arg_commandline():
 	""" Create an argument parser object """
@@ -211,6 +272,7 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
+	global model
 
 	# Load the tokenizer and model from sentence-transformers
 	model = AutoModel.from_pretrained(MODEL_ID)
@@ -272,7 +334,7 @@ def main():
 		tensors_list[counter] = torch.nn.functional.normalize(embeddings, p=2, dim=1).tolist()
 		counter += 1
 
-	csv_results(model, tensors_list)
+
 
 	# Free cache
 	torch.cuda.empty_cache()

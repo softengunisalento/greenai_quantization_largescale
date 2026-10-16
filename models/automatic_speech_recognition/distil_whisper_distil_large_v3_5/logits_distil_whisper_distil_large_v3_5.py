@@ -11,6 +11,8 @@ import tempfile
 import pandas as pd
 import gc
 import numpy as np
+from jiwer import wer, cer  # For WER calculation
+import re
 
 
 ### Constants
@@ -18,7 +20,8 @@ MODEL_ID = "distil-whisper/distil-large-v3.5"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -56,6 +59,15 @@ def collate_fn(batch):
 		"sampling_rate": batch[0]["sampling_rate"],
 		"file_name": [item["file_name"] for item in batch]
 	}
+
+def normalize_text(text):
+	"""Normalize text for WER calculation"""
+	# Convert to lowercase
+	text = text.lower()
+	# Remove punctuation and extra whitespace
+	text = re.sub(r'[^\w\s]', '', text)
+	text = re.sub(r'\s+', ' ', text)
+	return text.strip()
 
 def process_tar_file(dataset_id, file_name):
 	""" Function to extract and process the specific tar file """
@@ -108,6 +120,16 @@ def process_tar_file(dataset_id, file_name):
 						extracted_dir = item_path
 						break
 			
+				try:
+					delfile = "/tmp/MLCommons_unsupervised_peoples_speech/LibrivoxM4bCollectionAudiobooks_7/DasBildnisDesDorianGray01-09.mp3"
+					if os.path.exists(delfile):
+						os.remove(delfile)
+						print(f"File '{delfile}' has been deleted successfully.")
+				except PermissionError:
+					print(f"Permission denied: Cannot delete '{delfile}'.")
+				except Exception as e:
+					print(f"Error deleting file: {e}")
+			
 			print(f"Extracted to directory: {extracted_dir}")
 	
 	# Process the extracted files
@@ -134,36 +156,65 @@ def process_tar_file(dataset_id, file_name):
 				"sampling_rate": sr,
 				"file_name": file
 			})
+
 		except Exception as e:
 			print(f"Error loading {file}: {e}")
 	
 	return audio_data
 
-def csv_results(mse_values, max_diff_values):
-	""" Print MSE statistics """
-	mse_series = pd.Series(list(mse_values.values()))
+def csv_results(wer_values, cer_values, transcription_results):
+	""" Save WER and CER statistics to CSV """
+	wer_series = pd.Series(list(wer_values.values()))
+	cer_series = pd.Series(list(cer_values.values()))
 
 	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
-		# writer.writerow(["Record index", "MSE", "Max Difference"])
 		
-		# for idx in mse_values:
-		# 	writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
-		
-		writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
-		writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
+		# Write summary statistics
+		writer.writerow(["Metric", "Min", "Max", "Mean", "Median", "Std Dev"])
+		writer.writerow([
+			"WER", 
+			wer_series.min(), 
+			wer_series.max(), 
+			wer_series.mean(), 
+			wer_series.median(), 
+			wer_series.std()
+		])
+		writer.writerow([
+			"CER", 
+			cer_series.min(), 
+			cer_series.max(), 
+			cer_series.mean(), 
+			cer_series.median(), 
+			cer_series.std()
+		])
 
 	print(f"Results saved to {CSV_FILE}")
 
+def generate_transcription(model, processor, input_features, device):
+	"""Generate transcription using the model"""
+	with torch.no_grad():
+		# Generate tokens
+		predicted_ids = model.generate(
+			input_features,
+			max_length=448,  # Standard max length for Whisper
+			num_beams=1,     # Greedy decoding for consistency
+			do_sample=False
+		)
+		
+		# Decode to text
+		transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+		return transcription
+
 def arg_commandline():
 	""" Create an argument parser object """
-	parser = argparse.ArgumentParser(description="argument parser to use custom energy consumption measurements")
+	parser = argparse.ArgumentParser(description="Evaluate Whisper model quantization using WER")
 
-	# Add parameters for dataloader - Reduced defaults to help with memory issues
-	parser.add_argument('-b', '--batch_size', type=int, default=512, help='size of the batches for DataLoader')
-	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
-	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
-	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
+	# Add parameters for dataloader
+	parser.add_argument('-b', '--batch_size', type=int, default=1, help='size of the batches for DataLoader (recommended: 1 for WER evaluation)')
+	parser.add_argument('-w', '--num_workers', type=int, default=4, help='number of workers for data loading')
+	parser.add_argument('-f', '--prefetch_factor', type=int, default=2, help='number of batches loaded in advance by each worker')
+	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=448, help='maximum sequence length for tokenization')
 	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 	parser.add_argument('-a', '--max_audio_seconds', type=int, default=30, help='maximum audio length in seconds to process')
 
@@ -177,14 +228,18 @@ def main():
 	processor = WhisperProcessor.from_pretrained(MODEL_ID)
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
+	# Load original model
 	model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID).to(device)
 
+	# Load quantized model
 	if args.quantization_bits == 4:
 		model_quantized = WhisperForConditionalGeneration.from_pretrained(
 			MODEL_ID,
 			load_in_4bit=True,
-			device_map=device
+			device_map="auto",
+			torch_dtype=torch.float16
 		)
 	elif args.quantization_bits == 8:
 		model_quantized = WhisperForConditionalGeneration.from_pretrained(
@@ -205,7 +260,7 @@ def main():
 		print(f"No audio files found in {SPECIFIC_FILE}")
 		exit()
 
-	# Create dataset and dataloader with reduced batch size to avoid OOM
+	# Create dataset and dataloader
 	dataset = AudioDataset(
 		audio_files, 
 		processor, 
@@ -215,8 +270,8 @@ def main():
 	
 	dataloader = DataLoader(
 		dataset,
-		batch_size=args.batch_size, # Use a smaller batch size
-		shuffle=False, # Changed to False for more predictable memory usage
+		batch_size=args.batch_size,
+		shuffle=False,
 		num_workers=args.num_workers,
 		collate_fn=collate_fn,
 		pin_memory=True if device.type == 'cuda' else False,
@@ -224,102 +279,94 @@ def main():
 		persistent_workers=True if args.num_workers > 0 else False
 	)
 
-	# Dictionary to store MSE values for each file
-	all_mse_values = {}
-	all_max_diff_values = {}
+	# Dictionaries to store results
+	all_wer_values = {}
+	all_cer_values = {}
+	all_transcription_results = {}
 
 	# Process each audio file
-	print(f"Running {len(audio_files)} audio files inference with batch size {args.batch_size} on {device}")
+	print(f"Running transcription inference on {len(audio_files)} audio files with batch size {args.batch_size} on {device}")
 
-	# Process files in smaller chunks to avoid OOM
-	print("Trying with a smaller chunk size...")
-	chunk_size = 1 # Process one file at a time
-
-	for batch_idx, batch in enumerate(dataloader):
-		
-		# Try to process the batch (1 file at a time)
-		for i in tqdm(range(len(batch["file_name"]))):
-			try:
-				mse_values = {}
-				max_diff_values = {}
-
-				# Create a single-file batch
-				single_batch = {
-					"array": [batch["array"][i]],
-					"sampling_rate": batch["sampling_rate"],
-					"file_name": [batch["file_name"][i]]
+	for batch_idx, batch in enumerate(tqdm(dataloader, desc="Processing batches")):
+		try:
+			# Process each file in the batch
+			for i in range(len(batch["file_name"])):
+				file_name = batch["file_name"][i]
+				audio_array = batch["array"][i]
+				sampling_rate = batch["sampling_rate"]
+				
+				# Resample if necessary
+				if processor.feature_extractor.sampling_rate != sampling_rate:
+					audio_array = librosa.resample(
+						audio_array, 
+						orig_sr=sampling_rate, 
+						target_sr=processor.feature_extractor.sampling_rate
+					)
+					current_sampling_rate = processor.feature_extractor.sampling_rate
+				else:
+					current_sampling_rate = sampling_rate
+				
+				# Prepare input features
+				inputs = processor.feature_extractor(
+					[audio_array], 
+					sampling_rate=current_sampling_rate, 
+					return_tensors="pt"
+				).to(device)
+				
+				# Generate transcription with original model
+				original_transcription = generate_transcription(
+					model, processor, inputs.input_features, device
+				)
+				
+				# Generate transcription with quantized model
+				# Convert to appropriate precision for quantized model
+				quantized_inputs = inputs.input_features.half()
+				
+				quantized_transcription = generate_transcription(
+					model_quantized, processor, quantized_inputs, device
+				)
+				
+				# Normalize transcriptions for WER calculation
+				original_normalized = normalize_text(original_transcription)
+				quantized_normalized = normalize_text(quantized_transcription)
+				
+				# Calculate WER and CER
+				if original_normalized and quantized_normalized:
+					try:
+						wer_score = wer(original_normalized, quantized_normalized)
+						cer_score = cer(original_normalized, quantized_normalized)
+					except Exception as e:
+						print(f"Error calculating WER/CER for {file_name}: {e}")
+						wer_score = 1.0  # Maximum error
+						cer_score = 1.0
+				else:
+					# Handle empty transcriptions
+					if not original_normalized and not quantized_normalized:
+						wer_score = 0.0
+						cer_score = 0.0
+					else:
+						wer_score = 1.0
+						cer_score = 1.0
+				
+				# Store results
+				all_wer_values[file_name] = wer_score
+				all_cer_values[file_name] = cer_score
+				all_transcription_results[file_name] = {
+					'original': original_transcription,
+					'quantized': quantized_transcription
 				}
 				
-				# Use a much smaller batch size to process files sequentially
-				file_names = single_batch["file_name"]
-				audio_array = single_batch["array"]
-				sampling_rate = single_batch["sampling_rate"]
-
-				# Chunk the data
-				for i in range(0, len(file_names), chunk_size):
-					chunk_files = file_names[i:i+chunk_size]
-					chunk_audio = audio_array[i:i+chunk_size]
-
-					# Check if the model requires resampling of the audio
-					if processor.feature_extractor.sampling_rate != sampling_rate:
-						chunk_audio = [librosa.resample(
-							audio, 
-							orig_sr=sampling_rate, 
-							target_sr=processor.feature_extractor.sampling_rate
-						) for audio in chunk_audio]
-						current_sampling_rate = processor.feature_extractor.sampling_rate
-					else:
-						current_sampling_rate = sampling_rate
-						
-					# Tokenize input batch
-					inputs = processor.feature_extractor(
-						chunk_audio, 
-						sampling_rate=current_sampling_rate, 
-						return_tensors="pt"
-					).to(device)
-					
-					# Prepare decoder input IDs
-					decoder_input_ids = torch.tensor([[model.config.decoder_start_token_id]]).to(device)
-					
-					with torch.no_grad():
-						original_outputs = model(
-							input_features=inputs.input_features, 
-							decoder_input_ids=decoder_input_ids
-						).logits.detach().cpu().numpy()
-					
-					# Explicitly convert to half precision (float16) to match quantized model
-					inputs.input_features = inputs.input_features.half().to(device)
-					
-					with torch.no_grad():
-						quantized_outputs = model_quantized(
-							input_features=inputs.input_features, 
-							decoder_input_ids=decoder_input_ids
-						).logits.detach().cpu().numpy()
-					
-					# Calculate metrics
-					for j, file_name in enumerate(chunk_files):
-						original_slice = original_outputs[j:j+1]
-						quantized_slice = quantized_outputs[j:j+1]
-						
-						# Calculate MSE and max difference
-						mse = np.mean((original_slice - quantized_slice) ** 2)
-						max_diff = np.max(np.abs(original_slice - quantized_slice))
-						
-						mse_values[file_name] = float(mse)
-						max_diff_values[file_name] = float(max_diff)
-				
-				# Update the global dictionaries
-				all_mse_values.update(mse_values)
-				all_max_diff_values.update(max_diff_values)
-				
-			except Exception as inner_e:
-				print(f"Failed to process file {batch['file_name'][i]}: {str(inner_e)}")
+		except Exception as e:
+			print(f"Failed to process batch {batch_idx}: {str(e)}")
+			continue
 		
-		torch.cuda.empty_cache()
+		# Clean up GPU memory
+		if device.type == 'cuda':
+			torch.cuda.empty_cache()
 		gc.collect()
 
-	# Save results
-	csv_results(all_mse_values, all_max_diff_values)
+	# Save results to CSV
+	csv_results(all_wer_values, all_cer_values, all_transcription_results)
 
 if __name__ == "__main__":
 	main()

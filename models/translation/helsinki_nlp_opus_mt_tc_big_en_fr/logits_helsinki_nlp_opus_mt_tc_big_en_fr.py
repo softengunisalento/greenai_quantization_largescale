@@ -7,6 +7,8 @@ import torch
 import argparse
 import pandas as pd
 import json
+from sacrebleu import sentence_bleu
+import numpy as np
 
 
 ### Constants
@@ -14,7 +16,8 @@ MODEL_ID = "Helsinki-NLP/opus-mt-tc-big-en-fr"
 DATASET_ID = "bigscience/xP3"
 TMP_FNAME = "bigscience_xP3"
 SPECIFIC_FILE = "xp3_GEM_wiki_lingua_ar_en_test_xp3longwritearticle.jsonl"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -34,11 +37,11 @@ class XP3Dataset(Dataset):
         input_text = self.inputs[idx]
         target_text = self.targets[idx]
         
-        # Skip if text is too short (handled in collate_fn)
+        # Skip if text is too short
         if len(input_text.split()) < 5:
             return None
             
-        # Tokenize the text
+        # Tokenize the input text for generation
         inputs = self.tokenizer(
             input_text, 
             truncation=True,
@@ -47,18 +50,12 @@ class XP3Dataset(Dataset):
             return_tensors="pt"
         )
         
-        targets = self.tokenizer(
-            target_text,
-            truncation=True,
-            padding=True,
-            max_length=args.max_length_tokenizer,
-            return_tensors="pt"
-        )
-        
+        # Keep target text as string for BLEU evaluation
         return {
             "input_ids": inputs["input_ids"][0],
             "attention_mask": inputs["attention_mask"][0],
-            "target_ids": targets["input_ids"][0]
+            "target_text": target_text,
+            "input_text": input_text
         }
 
 def collate_fn(batch):
@@ -71,12 +68,12 @@ def collate_fn(batch):
     
     # Get max length in this batch
     max_input_length = max(len(item["input_ids"]) for item in batch)
-    max_target_length = max(len(item["target_ids"]) for item in batch)
     
     # Prepare lists for batched data
     input_ids = []
     attention_masks = []
-    target_ids = []
+    target_texts = []
+    input_texts = []
     
     # Pad sequences
     for item in batch:
@@ -97,27 +94,19 @@ def collate_fn(batch):
         ])
         attention_masks.append(padded_attention_mask)
         
-        # Pad target_ids
-        curr_target_len = len(item["target_ids"])
-        padding_target_len = max_target_length - curr_target_len
-        
-        padded_target_ids = torch.cat([
-            item["target_ids"],
-            torch.tensor([tokenizer.pad_token_id] * padding_target_len, dtype=torch.long)
-        ])
-        target_ids.append(padded_target_ids)
+        # Keep target texts as strings
+        target_texts.append(item["target_text"])
+        input_texts.append(item["input_text"])
     
     return {
         "input_ids": torch.stack(input_ids),
         "attention_mask": torch.stack(attention_masks),
-        "target_ids": torch.stack(target_ids)
+        "target_texts": target_texts,
+        "input_texts": input_texts
     }
 
 def load_jsonl_file(dataset_id, file_name):
     """Function to extract and process the specific JSONL file"""
-    # Check if the file exists in the HuggingFace dataset
-    file_path = None
-    
     from huggingface_hub import hf_hub_download
     file_path = hf_hub_download(
         repo_id=dataset_id,
@@ -138,19 +127,59 @@ def load_jsonl_file(dataset_id, file_name):
         print(f"Error loading {file_name}: {e}")
         return None
 
-def csv_results(mse_values, max_diff_values):
-    """ Print MSE statistics """
-    mse_series = pd.Series(list(mse_values.values()))
+def generate_text(model, tokenizer, input_ids, attention_mask, device):
+    """Generate text using the model"""
+    with torch.no_grad():
+        generated_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=args.max_generation_length,
+            num_beams=args.num_beams,
+            early_stopping=True,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id
+        )
+    
+    # Decode the generated text
+    generated_texts = []
+    for i, generated_sequence in enumerate(generated_ids):
+        # Remove input tokens from generated sequence
+        input_len = input_ids[i].shape[0]
+        generated_tokens = generated_sequence[input_len:]
+        
+        generated_text = tokenizer.decode(
+            generated_tokens, 
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True
+        )
+        generated_texts.append(generated_text)
+    
+    return generated_texts
 
+def calculate_bleu_scores(references, hypotheses):
+    """Calculate BLEU scores for a batch of translations"""
+    sentence_bleu_scores = []
+    
+    for ref, hyp in zip(references, hypotheses):
+        # Calculate sentence-level BLEU score
+        score = sentence_bleu(hyp, [ref]).score
+        sentence_bleu_scores.append(score)
+    
+    return sentence_bleu_scores
+
+def csv_results(results_data):
+    """Save results to CSV file"""
     with open(CSV_FILE, mode='a', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(["Record index", "MSE", "Max Difference"])
         
-        for idx in mse_values:
-            writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
-        
-        writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
-        writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
+        # Calculate and write statistics
+        original_bleu_scores = [d['original_bleu'] for d in results_data]
+        quantized_bleu_scores = [d['quantized_bleu'] for d in results_data]
+        bleu_differences = [d['bleu_diff'] for d in results_data]
+
+        writer.writerow(["Min BLEU", "Max BLEU", "Mean BLEU", "Median BLEU", "Standard Deviation"])
+        writer.writerow([np.min(bleu_differences), np.max(bleu_differences), np.mean(bleu_differences), np.median(bleu_differences), np.std(bleu_differences)])
 
     print(f"Results saved to {CSV_FILE}")
 
@@ -164,6 +193,11 @@ def arg_commandline():
     parser.add_argument('-f', '--prefetch_factor', type=int, default=2, help='number of batches loaded in advance by each worker')
     parser.add_argument('-t', '--max_length_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
     parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int8')
+    
+    # Add parameters for text generation
+    parser.add_argument('-g', '--max_generation_length', type=int, default=512, help='maximum length for generated text')
+    parser.add_argument('-n', '--num_beams', type=int, default=4, help='number of beams for beam search')
+    parser.add_argument('-l', '--limit_samples', type=int, default=5000, help='limit number of samples to evaluate (for faster testing)')
 
     return parser.parse_args()
 
@@ -180,8 +214,13 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID)
     
+    # Set pad token if not present
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
     # Set the device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"device used: {device}")
 
     # Move the original model to the correct device
     model = model.to(device)
@@ -212,13 +251,18 @@ def main():
         print(f"No data found in {SPECIFIC_FILE}")
         exit()
     
+    # Limit samples for faster evaluation if specified
+    if args.limit_samples > 0 and len(df) > args.limit_samples:
+        df = df.head(args.limit_samples)
+        print(f"Limited to {len(df)} samples for evaluation")
+    
     # Create dataset and dataloader
     dataset = XP3Dataset(df, tokenizer)
     
     dataloader = DataLoader(
         dataset, 
         batch_size=args.batch_size, 
-        shuffle=True, 
+        shuffle=False,  # Keep order for consistent evaluation
         num_workers=args.num_workers,
         collate_fn=collate_fn,
         pin_memory=True if device.type == 'cuda' else False,
@@ -226,14 +270,13 @@ def main():
         persistent_workers=True if args.num_workers > 0 else False
     )
     
-    # Dictionary to store MSE values for each record
-    mse_values = {}
-    max_diff_values = {}
+    # List to store all results
+    results_data = []
     counter = 0
     
-    print(f"Running inference with batch size {args.batch_size} on {device}")
+    print(f"Running text generation and BLEU evaluation with batch size {args.batch_size} on {device}")
     
-    for batch in tqdm(dataloader, desc="Comparing model outputs"):
+    for batch in tqdm(dataloader, desc="Evaluating model generations"):
         # Skip empty batches
         if batch is None:
             continue
@@ -241,47 +284,37 @@ def main():
         # Move data to device
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
-        target_ids = batch["target_ids"].to(device)
+        target_texts = batch["target_texts"]
+        input_texts = batch["input_texts"]
         
-        # Forward pass through both models
-        with torch.no_grad():
-            # For original model
-            original_outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=target_ids
-            )
-            
-            # For quantized model
-            quantized_outputs = model_quantized(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=target_ids
-            )
+        # Generate text with original model
+        original_generated = generate_text(model, tokenizer, input_ids, attention_mask, device)
         
-        # Extract logits
-        original_logits = original_outputs.logits
-        quantized_logits = quantized_outputs.logits
+        # Generate text with quantized model
+        quantized_generated = generate_text(model_quantized, tokenizer, input_ids, attention_mask, device)
         
-        # Calculate MSE and max difference for each example in the batch
-        for i in range(len(input_ids)):
-            # Flatten the logits for this example
-            original_logits_flat = original_logits[i].view(-1)
-            quantized_logits_flat = quantized_logits[i].view(-1)
+        # Calculate BLEU scores
+        original_bleu_scores = calculate_bleu_scores(target_texts, original_generated)
+        quantized_bleu_scores = calculate_bleu_scores(target_texts, quantized_generated)
+        
+        # Store results
+        for i in range(len(input_texts)):
+            bleu_diff = original_bleu_scores[i] - quantized_bleu_scores[i]
             
-            # Calculate the mean squared error (MSE) between the outputs
-            mse = torch.mean((original_logits_flat - quantized_logits_flat) ** 2).item()
-            
-            # Calculate the maximum absolute difference
-            max_diff = torch.max(torch.abs(original_logits_flat - quantized_logits_flat)).item()
-            
-            # Store values for later analysis
-            mse_values[counter] = mse
-            max_diff_values[counter] = max_diff
+            results_data.append({
+                'index': counter,
+                'original_bleu': original_bleu_scores[i],
+                'quantized_bleu': quantized_bleu_scores[i],
+                'bleu_diff': bleu_diff,
+                'input_text': input_texts[i],
+                'reference_text': target_texts[i],
+                'original_generated': original_generated[i],
+                'quantized_generated': quantized_generated[i]
+            })
             counter += 1
     
     # Save results to CSV
-    csv_results(mse_values, max_diff_values)
+    csv_results(results_data)
 
     # Free cache
     if torch.cuda.is_available():

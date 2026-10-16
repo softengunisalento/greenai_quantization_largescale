@@ -8,6 +8,7 @@ import torch
 import tarfile
 import librosa
 import argparse
+import pandas as pd
 import tempfile
 from tqdm import tqdm
 from codecarbon import EmissionsTracker
@@ -20,7 +21,8 @@ MODEL_ID = "openai/whisper-small"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### FunctionsFunctions
@@ -188,40 +190,99 @@ def measure_energy_consumption(func):
 		cpu_energy_Wh = tracker._total_cpu_energy.kWh * 1000
 		gpu_energy_Wh = tracker._total_gpu_energy.kWh * 1000
 		ram_energy_Wh = tracker._total_ram_energy.kWh * 1000
-		totale_energy_Wh = tracker._total_energy.kWh * 1000
+		total_energy_Wh = tracker._total_energy.kWh * 1000
 
-		with open(CSV_FILE, mode='a', newline='') as file:
-			writer = csv.writer(file)
+		# check the memory footprint of the model
+		mem_footprint = model.get_memory_footprint()
+
+		# checking the size of the model
+		module_sizes = evaluate_size(model)
+
+		# Add energy columns to existing CSV
+		try:
+			# Check if file exists and has content
+			file_exists = os.path.exists(CSV_FILE)
+			has_content = False
 			
-			# write stats
-			writer.writerow(["Inference s", "CPU Wh", "GPU Wh", "RAM Wh", "Energy Wh", "CO2 Emissions gr"])
-			writer.writerow([inference_time,cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, totale_energy_Wh, co2_emissions])
+			if file_exists:
+				try:
+					df = pd.read_csv(CSV_FILE)
+					has_content = len(df) > 0
+				except:
+					has_content = False
+			
+			# Create new row with energy data
+			energy_data = {
+				'footprint_mb': mem_footprint/1e+6,
+				'sizes_gb': module_sizes/1e+9,
+				'inference_time_s': inference_time,
+				'cpu_wh': cpu_energy_Wh,
+				'gpu_wh': gpu_energy_Wh,
+				'ram_wh': ram_energy_Wh,
+				'total_energy_wh': total_energy_Wh,
+				'co2_emissions_gr': co2_emissions
+			}
+			
+			if has_content:
+				# Read existing data and append new row
+				df = pd.read_csv(CSV_FILE)
+				
+				# Add missing columns with NaN if they don't exist
+				# for col in energy_data.keys():
+				# 	if col not in df.columns:
+				# 		df[col] = pd.NA
+				
+				# Create new row - copy last row and update with energy data
+				new_row = df.iloc[-1].copy() if len(df) > 0 else pd.Series()
+				for key, value in energy_data.items():
+					new_row[key] = value
+				
+				# Append new row
+				df = pd.concat([df, new_row.to_frame().T], ignore_index=True)
+			else:
+				# Create new DataFrame with energy data
+				df = pd.DataFrame([energy_data])
+			
+			# Write back to CSV
+			df.to_csv(CSV_FILE, index=False)
+			
+		except Exception as e:
+			print(f"Error adding energy data: {e}")
+			# Fallback to simple append
+			with open(CSV_FILE, mode='a', newline='') as file:
+				writer = csv.writer(file)
+				if not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0:
+					writer.writerow(["footprint_mb", "sizes_gb", "inference_time_s", "cpu_wh", "gpu_wh", "ram_wh", "total_energy_wh", "co2_emissions_gr"])
+				writer.writerow([inference_time, cpu_energy_Wh, gpu_energy_Wh, ram_energy_Wh, total_energy_Wh, co2_emissions])
 
 		return result
 	return wrapper
 
-def csv_results(model, transcriptions_s_tokens, transcriptions):
-	""" Print statistics """
-	# check the memory footprint of the model
-	mem_footprint = model.get_memory_footprint()
+# def csv_results(model, transcriptions_s_tokens, transcriptions):
+# 	""" Print statistics """
+# 	# check the memory footprint of the model
+# 	mem_footprint = model.get_memory_footprint()
 
-	# checking the size of the model
-	module_sizes = evaluate_size(model)
+# 	# checking the size of the model
+# 	module_sizes = evaluate_size(model)
 
-	with open(CSV_FILE, mode='a', newline='') as file:
-		writer = csv.writer(file)
+# 	# Check if CSV file exists to determine if headers are needed
+# 	csv_exists = os.path.exists(CSV_FILE)
+# 	with open(CSV_FILE, mode='a', newline='') as file:
+# 		writer = csv.writer(file)
 		
-		# write files stats
-		# writer.writerow(["File Name", "Transcription", "Transcription with special tokens"])
+# 		# write files stats
+# 		# writer.writerow(["File Name", "Transcription", "Transcription with special tokens"])
 
-		# for file_name in transcriptions:
-		# 	writer.writerow([file_name, transcriptions[file_name], transcriptions_s_tokens[file_name]])
+# 		# for file_name in transcriptions:
+# 		# 	writer.writerow([file_name, transcriptions[file_name], transcriptions_s_tokens[file_name]])
 		
-		# write metrics
-		writer.writerow(["Footprint MBs", "Size GB"])
-		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
+# 		# Only write headers if CSV doesn't exist
+# 		if not csv_exists:
+# 			writer.writerow(["footprint_mb", "sizes_gb"])
+# 		writer.writerow([mem_footprint/1e+6, module_sizes/1e+9])
 
-	print(f"Results saved to {CSV_FILE}")
+# 	print(f"Results saved to {CSV_FILE}")
 
 def arg_commandline():
 	""" Create an argument parser object """
@@ -244,11 +305,13 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
+	global model
 
 	# Load the Whisper model and processor
 	processor = WhisperProcessor.from_pretrained(MODEL_ID)
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID).to(device)
 
@@ -341,7 +404,7 @@ def main():
 			torch.cuda.empty_cache()
 			gc.collect()
 
-	csv_results(model, transcriptions_s_tokens, transcriptions)
+
 
 
 if __name__ == "__main__":

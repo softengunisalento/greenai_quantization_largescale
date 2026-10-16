@@ -11,6 +11,7 @@ import tempfile
 import pandas as pd
 import gc
 import numpy as np
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
 
 ### Constants
@@ -18,7 +19,8 @@ MODEL_ID = "philschmid/pyannote-segmentation"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -139,19 +141,130 @@ def process_tar_file(dataset_id, file_name):
 	
 	return audio_data
 
-def csv_results(mse_values, max_diff_values):
-	""" Print MSE statistics """
-	mse_series = pd.Series(list(mse_values.values()))
+def convert_to_binary_predictions(segmentation_output, threshold=0.5):
+	"""
+	Convert segmentation output to binary predictions.
+	
+	Args:
+		segmentation_output: Output from pyannote segmentation model
+		threshold: Threshold for binary classification
+	
+	Returns:
+		Binary predictions (0 or 1) for each time frame
+	"""
+	# Handle numpy arrays
+	if isinstance(segmentation_output, torch.Tensor):
+		segmentation_output = segmentation_output.detach().cpu().numpy()
+	
+	# Ensure we have a numpy array
+	segmentation_output = np.array(segmentation_output)
+	
+	# Handle different output shapes
+	if len(segmentation_output.shape) > 2:
+		# If we have batch dimension, squeeze it
+		segmentation_output = np.squeeze(segmentation_output)
+	
+	if len(segmentation_output.shape) == 2:
+		# Multi-class case: take the class with highest probability
+		# For speech segmentation, we often have [non-speech, speech] probabilities
+		if segmentation_output.shape[1] == 2:
+			# Binary case: use speech probability (index 1)
+			probabilities = segmentation_output[:, 1]
+		else:
+			# Multi-class case: use max probability
+			probabilities = np.max(segmentation_output, axis=1)
+	else:
+		# Single dimension case
+		probabilities = segmentation_output
+	
+	# Convert to binary predictions
+	binary_predictions = (probabilities > threshold).astype(int)
+	return binary_predictions
+
+def calculate_detection_accuracy(original_output, quantized_output, threshold=0.5):
+	"""
+	Calculate detection accuracy between original and quantized model outputs.
+	
+	Args:
+		original_output: Output from original model
+		quantized_output: Output from quantized model
+		threshold: Threshold for binary classification
+	
+	Returns:
+		Dictionary containing accuracy metrics
+	"""
+	try:
+		# Convert outputs to binary predictions
+		original_binary = convert_to_binary_predictions(original_output, threshold)
+		quantized_binary = convert_to_binary_predictions(quantized_output, threshold)
+		
+		# Ensure both arrays have the same length
+		min_length = min(len(original_binary), len(quantized_binary))
+		original_binary = original_binary[:min_length]
+		quantized_binary = quantized_binary[:min_length]
+		
+		# Ensure we have 1D arrays
+		original_binary = original_binary.flatten()
+		quantized_binary = quantized_binary.flatten()
+		
+		# Calculate accuracy manually to avoid sklearn issues
+		correct_predictions = np.sum(original_binary == quantized_binary)
+		total_predictions = len(original_binary)
+		accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+		
+		# Calculate confusion matrix components manually
+		tp = np.sum((original_binary == 1) & (quantized_binary == 1))
+		tn = np.sum((original_binary == 0) & (quantized_binary == 0))
+		fp = np.sum((original_binary == 0) & (quantized_binary == 1))
+		fn = np.sum((original_binary == 1) & (quantized_binary == 0))
+		
+		# Calculate additional metrics
+		precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+		recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+		f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+		
+		return {
+			'accuracy': accuracy,
+			'precision': precision,
+			'recall': recall,
+			'f1_score': f1_score,
+			'true_negatives': int(tn),
+			'false_positives': int(fp),
+			'false_negatives': int(fn),
+			'true_positives': int(tp),
+			'total_predictions': total_predictions
+		}
+		
+	except Exception as e:
+		print(f"Error in calculate_detection_accuracy: {e}")
+		return {
+			'accuracy': 0.0,
+			'precision': 0.0,
+			'recall': 0.0,
+			'f1_score': 0.0,
+			'true_negatives': 0,
+			'false_positives': 0,
+			'false_negatives': 0,
+			'true_positives': 0,
+			'total_predictions': 0
+		}
+
+def csv_results(accuracy_values):
+	""" Save accuracy results to CSV """
+	accuracy_series = pd.Series(list(accuracy_values.values()))
 
 	with open(CSV_FILE, mode='a', newline='') as file:
 		writer = csv.writer(file)
-		# writer.writerow(["Record index", "MSE", "Max Difference"])
 		
-		# for idx in mse_values:
-		# 	writer.writerow([idx, mse_values[idx], max_diff_values[idx]])
-		
-		writer.writerow(["Min MSE", "Max MSE", "Mean MSE", "Median MSE", "Standard Deviation"])
-		writer.writerow([mse_series.min(), mse_series.max(), mse_series.mean(), mse_series.median(), mse_series.std()])
+		# Write overall accuracy statistics
+		writer.writerow(["Min Accuracy", "Max Accuracy", "Mean Accuracy", "Median Accuracy", "Standard Deviation"])
+		writer.writerow([
+			accuracy_series.min(), 
+			accuracy_series.max(), 
+			accuracy_series.mean(), 
+			accuracy_series.median(), 
+			accuracy_series.std()
+		])
 
 	print(f"Results saved to {CSV_FILE}")
 
@@ -166,6 +279,7 @@ def arg_commandline():
 	parser.add_argument('-t', '--max_lenght_tokenizer', type=int, default=128, help='maximum sequence length for tokenization')
 	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 	parser.add_argument('-a', '--max_audio_seconds', type=int, default=30, help='maximum audio length in seconds to process')
+	parser.add_argument('--threshold', type=float, default=0.5, help='threshold for binary classification')
 
 	return parser.parse_args()
 
@@ -175,6 +289,7 @@ def main():
 	args = arg_commandline()
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	model = Model.from_pretrained(MODEL_ID).to(device)
 	inference = Inference(model)
@@ -224,8 +339,7 @@ def main():
 		persistent_workers=(args.num_workers > 0)
 	)
 
-	all_mse_values = {}
-	all_max_diff_values = {}
+	all_accuracy_values = {}
 
 	print(f"Running inference on {len(audio_files)} audio files using {device}")
 
@@ -249,21 +363,29 @@ def main():
 					{"waveform": waveform_tensor, "sample_rate": sampling_rate}
 				).data
 
-				# Compute error metrics
-				mse = np.mean((embedding_original - embedding_quantized) ** 2)
-				max_diff = np.max(np.abs(embedding_original - embedding_quantized))
+				# Calculate detection accuracy metrics
+				metrics = calculate_detection_accuracy(
+					embedding_original, 
+					embedding_quantized, 
+					threshold=args.threshold
+				)
 
-				all_mse_values[file_name] = float(mse)
-				all_max_diff_values[file_name] = float(max_diff)
+				all_accuracy_values[file_name] = metrics['accuracy']
+
+				# Print progress for debugging
+				if metrics['total_predictions'] > 0:
+					print(f"Processed {file_name}: Accuracy={metrics['accuracy']}, Predictions={metrics['total_predictions']}")
 
 			except Exception as inner_e:
 				print(f"Failed to process file {batch['file_name'][i]}: {str(inner_e)}")
+				# Add default values for failed files
+				all_accuracy_values[batch['file_name'][i]] = 0.0
 
 		torch.cuda.empty_cache()
 		gc.collect()
 
 	# Save results to CSV
-	csv_results(all_mse_values, all_max_diff_values)
+	csv_results(all_accuracy_values)
 
 
 if __name__ == "__main__":

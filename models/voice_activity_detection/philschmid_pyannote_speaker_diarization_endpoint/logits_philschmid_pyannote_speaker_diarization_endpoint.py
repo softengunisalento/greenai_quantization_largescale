@@ -14,11 +14,12 @@ import numpy as np
 
 
 ### Constants
-MODEL_ID = "philschmid/pyannote-speaker-diarization-endpoint"
+MODEL_ID = "pyannote/embedding"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
-CSV_FILE = os.path.splitext(os.path.basename(__file__))[0] + ".csv"
+from pathlib import Path
+CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
 
 
 ### Functions
@@ -175,6 +176,7 @@ def main():
 	args = arg_commandline()
 	
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	print(f"device used: {device}")
 
 	model = Model.from_pretrained(MODEL_ID).to(device)
 	inference = Inference(model)
