@@ -86,8 +86,40 @@ def read_energy_column(csv_path):
 	return vals
 
 
-def read_qd_energy_columns(csv_path):
-	"""Returns (int4_vals, int8_vals) via the even/odd row convention."""
+def read_sizes_gb_avg(csv_path):
+	"""Average the sizes_gb column of an or_*.csv (FP32 baseline)."""
+	if not csv_path.exists():
+		return None
+	with open(csv_path, newline="") as f:
+		all_rows = list(csv.reader(f))
+	if not all_rows:
+		return None
+	header, rows = all_rows[0], strip_avg_rows(all_rows[1:])
+	if "sizes_gb" not in header:
+		return None
+	idx = header.index("sizes_gb")
+	vals = []
+	for row in rows:
+		if idx >= len(row):
+			continue
+		try:
+			vals.append(float(row[idx]))
+		except ValueError:
+			continue
+	return (sum(vals) / len(vals)) if vals else None
+
+
+def read_qd_energy_columns(csv_path, or_sizes_gb, model_label=""):
+	"""Classify each qd_ row as int8/int4 by its OWN sizes_gb ratio against
+	the model's FP32 baseline, not by row position (even/odd).
+
+	Row-position parity (wrapper_rep.py's "-q 4 then -q 8" per repetition)
+	is unreliable in practice: bitsandbytes can silently fall back to
+	8-bit when 4-bit isn't supported (no error raised), and manual top-up
+	runs at different times desync the alternation for files built from
+	multiple separate invocations. bitsandbytes INT8 reports a very
+	consistent ~25% of the FP32 sizes_gb; INT4 packs 2 values/byte so its
+	ratio varies by architecture - only reliably below the INT8 band."""
 	if not csv_path.exists():
 		return [], []
 	with open(csv_path, newline="") as f:
@@ -97,21 +129,59 @@ def read_qd_energy_columns(csv_path):
 	header, rows = all_rows[0], strip_avg_rows(all_rows[1:])
 	if ENERGY_COL not in header:
 		return [], []
-	idx = header.index(ENERGY_COL)
-	int4_rows, int8_rows = rows[0::2], rows[1::2]
+	energy_idx = header.index(ENERGY_COL)
+	size_idx = header.index("sizes_gb") if "sizes_gb" in header else None
 
-	def extract(rs):
-		vals = []
-		for row in rs:
-			if idx >= len(row):
-				continue
+	int4_vals, int8_vals, unknown = [], [], []
+	for row in rows:
+		ratio = None
+		size_val = None
+		if size_idx is not None and or_sizes_gb and size_idx < len(row):
 			try:
-				vals.append(float(row[idx]))
-			except ValueError:
-				continue
-		return vals
+				size_val = float(row[size_idx])
+				ratio = size_val / or_sizes_gb * 100.0
+			except (ValueError, ZeroDivisionError):
+				ratio = None
+		if energy_idx >= len(row):
+			continue
+		try:
+			energy = float(row[energy_idx])
+		except ValueError:
+			continue
+		if ratio is None:
+			unknown.append((size_val, energy))
+		elif 22.0 <= ratio <= 28.0:
+			int8_vals.append(energy)
+		elif ratio < 22.0:
+			int4_vals.append(energy)
+		else:
+			unknown.append((size_val, energy))
 
-	return extract(int4_rows), extract(int8_rows)
+	# Fallback for architectures where a large non-quantizable fraction
+	# (e.g. big embedding tables bitsandbytes never touches) pushes both
+	# ratios well above the fixed 22-28% INT8 band - only kicks in when the
+	# fixed bands caught nothing at all, and only on a clean, balanced
+	# two-value split (smaller size -> int4, larger -> int8).
+	if not int4_vals and not int8_vals and unknown:
+		by_value = {}
+		for size_val, energy in unknown:
+			if size_val is None:
+				continue
+			by_value.setdefault(size_val, []).append(energy)
+		if len(by_value) == 2:
+			lo_val, hi_val = sorted(by_value)
+			lo_energies, hi_energies = by_value[lo_val], by_value[hi_val]
+			if min(len(lo_energies), len(hi_energies)) >= 0.2 * len(unknown):
+				int4_vals, int8_vals = lo_energies, hi_energies
+				unknown = [(s, e) for s, e in unknown if s not in (lo_val, hi_val)]
+				print(f"  NOTE [{model_label}]: ratios ({lo_val/or_sizes_gb*100:.1f}% / {hi_val/or_sizes_gb*100:.1f}%) fall outside the fixed INT8 band but split cleanly into two balanced clusters - classified by relative size (smaller=int4, larger=int8) instead")
+
+	if unknown:
+		print(f"  WARNING [{model_label}]: {len(unknown)}/{len(rows)} qd_ rows have an unrecognized sizes_gb ratio - excluded from int4/int8")
+	if rows and not int4_vals:
+		print(f"  WARNING [{model_label}]: 0 rows classify as INT4 (all INT8/unknown) - INT4 likely never actually ran")
+
+	return int4_vals, int8_vals
 
 
 def median(vals):
@@ -246,7 +316,8 @@ def collect_models(models_dir):
 			continue
 
 		or_vals = read_energy_column(model_dir / f"{or_script.stem}.csv")
-		int4_vals, int8_vals = read_qd_energy_columns(model_dir / f"qd_{base}.csv")
+		or_sizes_gb = read_sizes_gb_avg(model_dir / f"{or_script.stem}.csv")
+		int4_vals, int8_vals = read_qd_energy_columns(model_dir / f"qd_{base}.csv", or_sizes_gb, model_label=model_id)
 
 		results.append({
 			"model_id": model_id,
