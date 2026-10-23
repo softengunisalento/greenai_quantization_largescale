@@ -120,10 +120,10 @@ def measure_energy_consumption(func):
 		total_energy_Wh = tracker._total_energy.kWh * 1000
 
 		# check the memory footprint of the model
-		mem_footprint = model.get_memory_footprint()
+		mem_footprint = model_quantized.get_memory_footprint()
 
 		# checking the size of the model
-		module_sizes = evaluate_size(model)
+		module_sizes = evaluate_size(model_quantized)
 
 		# Add energy columns to existing CSV
 		try:
@@ -229,15 +229,13 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
-	global model
+	global model_quantized
 
 	# Load the image processor, the model, and get images from the dataset
 	processor = AutoImageProcessor.from_pretrained(MODEL_ID)
-	
+
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print(f"device used: {device}")
-
-	model = AutoModelForImageClassification.from_pretrained(MODEL_ID).to(device)
 
 	if args.quantization_bits == 4:
 		model_quantized = AutoModelForImageClassification.from_pretrained(

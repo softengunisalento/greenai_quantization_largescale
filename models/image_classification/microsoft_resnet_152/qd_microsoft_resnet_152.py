@@ -1,5 +1,6 @@
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from torch.utils.data import Dataset, DataLoader
+from datasets import load_dataset
 from PIL import Image
 import torch
 import argparse
@@ -7,9 +8,6 @@ import pandas as pd
 import csv
 import os
 import time
-import tarfile
-import tempfile
-from huggingface_hub import login, hf_hub_download
 from tqdm import tqdm
 from codecarbon import EmissionsTracker
 
@@ -18,11 +16,8 @@ N_BYTES = 1  # Number of bytes that take each parameter (4=float32, 1=int8)
 CARBON_INTENSITY = 475  # Global average carbon intensity
 MODEL_ID = "microsoft/resnet-152"
 DATASET_ID = "ILSVRC/imagenet-1k"
-TMP_FNAME = "imagenet_val_images"
-SPECIFIC_FILE = "val_images.tar.gz"
 from pathlib import Path
 CSV_FILE = Path(__file__).with_suffix('.csv').resolve()
-HF_TOKEN = "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"
 
 ### Functions
 class ImageDataset(Dataset):
@@ -35,10 +30,10 @@ class ImageDataset(Dataset):
 
 	def __getitem__(self, idx):
 		item = self.image_files[idx]
-		
-		# Open and process the image
+
+		# Process the already-loaded image
 		try:
-			image = Image.open(item["path"]).convert("RGB")
+			image = item["image"].convert("RGB")
 			return {
 				"image": image,
 				"file_name": item["file_name"]
@@ -58,69 +53,21 @@ def collate_fn(batch):
 		"file_names": [item["file_name"] for item in batch]
 	}
 
-def process_tar_file(dataset_id, file_name):
-	""" Function to extract and process the specific tar file with authentication """
-	# Login with token
-	print("Authenticating with Hugging Face...")
-	login(token=HF_TOKEN)
-	
-	# Create a consistent temp directory name
-	temp_dir = os.path.join(tempfile.gettempdir(), TMP_FNAME)
-	extracted_dir = os.path.join(temp_dir, "images")
-	
-	# Check if the temp directory already exists and has content
-	if os.path.exists(extracted_dir) and os.listdir(extracted_dir):
-		print(f"Found existing temporary directory: {extracted_dir}")
-	else:
-		# Download the specific file with tqdm progress bar
-		try:
-			file_path = hf_hub_download(
-				repo_id=dataset_id,
-				filename=f"data/{file_name}",
-				repo_type="dataset",
-				local_files_only=False,
-				resume_download=True,
-				token=HF_TOKEN
-			)
-			
-			# Create the temp directory if it doesn't exist
-			os.makedirs(extracted_dir, exist_ok=True)
-			
-			# Extract image data from the tar file with tqdm progress
-			with tarfile.open(file_path, 'r:gz') as tar:
-				members = tar.getmembers()
-				print(f"Extracting {len(members)} files from tar archive...")
-				
-				for member in tqdm(members, desc="Extracting files"):
-					tar.extract(member, path=extracted_dir)
-				
-				print(f"Extracted to directory: {extracted_dir}")
-		except Exception as e:
-			print(f"Error downloading or extracting dataset: {e}")
-	
-	# Process the extracted files
+def load_validation_images(dataset_id, max_images=500):
+	""" Stream the validation split (imagenet-1k is parquet-backed on the Hub,
+	not a raw tar.gz - streaming avoids materializing the full dataset) """
+	ds = load_dataset(dataset_id, split="validation", streaming=True)
+
 	image_data = []
-	
-	# Find all image files (supporting common image formats)
-	image_files = []
-	image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.JPEG']
-	
-	for root, dirs, files in os.walk(extracted_dir):
-		for file in files:
-			if any(file.lower().endswith(ext) for ext in image_extensions):
-				image_files.append(os.path.join(root, file))
-	
-	print(f"Found {len(image_files)} image files")
-	
-	# Prepare the image data structure
-	max_images = 500  # Limit to 500 images for faster testing
-	for img_path in tqdm(image_files[:max_images], desc="Processing image files"):
-		file = os.path.basename(img_path)
+	for i, example in enumerate(tqdm(ds, total=max_images, desc="Streaming validation images")):
+		if i >= max_images:
+			break
 		image_data.append({
-			"path": img_path,
-			"file_name": file
+			"image": example["image"],
+			"file_name": f"val_{i:05d}"
 		})
-	
+
+	print(f"Found {len(image_data)} image files")
 	return image_data
 
 def evaluate_size(model):
@@ -173,10 +120,10 @@ def measure_energy_consumption(func):
 		total_energy_Wh = tracker._total_energy.kWh * 1000
 
 		# check the memory footprint of the model
-		mem_footprint = model.get_memory_footprint()
+		mem_footprint = model_quantized.get_memory_footprint()
 
 		# checking the size of the model
-		module_sizes = evaluate_size(model)
+		module_sizes = evaluate_size(model_quantized)
 
 		# Add energy columns to existing CSV
 		try:
@@ -271,7 +218,7 @@ def arg_commandline():
 	parser.add_argument('-m', '--mgpu', action='store_true', help='enable custom energy consumption measurement function')
 	# Add parameters for dataloader
 	parser.add_argument('-b', '--batch_size', type=int, default=512, help='size of the batches for DataLoader')
-	parser.add_argument('-w', '--num_workers', type=int, default=8, help='number of workers for data loading')
+	parser.add_argument('-w', '--num_workers', type=int, default=0, help='number of workers for data loading')
 	parser.add_argument('-f', '--prefetch_factor', type=int, default=4, help='number of batches loaded in advance by each worker')
 	parser.add_argument('-q', '--quantization_bits', type=int, default=8, help='value to quantize in int4 or int8')
 
@@ -282,15 +229,13 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
-	global model
+	global model_quantized
 
 	# Load the image processor, the model, and get images from the dataset
 	processor = AutoImageProcessor.from_pretrained(MODEL_ID)
-	
+
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print(f"device used: {device}")
-
-	model = AutoModelForImageClassification.from_pretrained(MODEL_ID).to(device)
 
 	if args.quantization_bits == 4:
 		model_quantized = AutoModelForImageClassification.from_pretrained(
@@ -307,9 +252,9 @@ def main():
 	else:
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
 
-	# Extract images from the tar file
-	print(f"Processing {SPECIFIC_FILE} from {DATASET_ID}...")
-	image_files = process_tar_file(DATASET_ID, SPECIFIC_FILE)
+	# Load images from the validation split
+	print(f"Processing validation split from {DATASET_ID}...")
+	image_files = load_validation_images(DATASET_ID)
 
 	if not image_files:
 		print("No image files found. Exiting.")
@@ -328,7 +273,7 @@ def main():
 		num_workers=args.num_workers,
 		collate_fn=collate_fn,
 		pin_memory=True if device == 'cuda' else False,
-		prefetch_factor=args.prefetch_factor,
+		prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
 		persistent_workers=True if args.num_workers > 0 else False
 	)
 

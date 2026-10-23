@@ -113,10 +113,10 @@ def measure_energy_consumption(func):
 		total_energy_Wh = tracker._total_energy.kWh * 1000
 
 		# check the memory footprint of the model
-		mem_footprint = model.get_memory_footprint()
+		mem_footprint = model_quantized.get_memory_footprint()
 
 		# checking the size of the model
-		module_sizes = evaluate_size(model)
+		module_sizes = evaluate_size(model_quantized)
 
 		# Add energy columns to existing CSV
 		try:
@@ -222,14 +222,12 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
-	global model
+	global model_quantized
 
 	tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-	model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID)
 
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-	model = model.to(device)
-	
+
 	# Apply dynamic quantization to the model
 	if args.quantization_bits == 4:
 		model_quantized = AutoModelForSeq2SeqLM.from_pretrained(

@@ -17,7 +17,7 @@ from codecarbon import EmissionsTracker
 ### Constants
 N_BYTES = 1 # Number of bytes that take each parameter (4=float32, 1=int8)
 CARBON_INTENSITY = 475 # Global average carbon intensity
-MODEL_ID = "openai/whisper-small"
+MODEL_ID = "distil-whisper/distil-large-v3.5"
 DATASET_ID = "MLCommons/unsupervised_peoples_speech"
 TMP_FNAME = "MLCommons_unsupervised_peoples_speech"
 SPECIFIC_FILE = "000030.tar"
@@ -193,10 +193,10 @@ def measure_energy_consumption(func):
 		total_energy_Wh = tracker._total_energy.kWh * 1000
 
 		# check the memory footprint of the model
-		mem_footprint = model.get_memory_footprint()
+		mem_footprint = model_quantized.get_memory_footprint()
 
 		# checking the size of the model
-		module_sizes = evaluate_size(model)
+		module_sizes = evaluate_size(model_quantized)
 
 		# Add energy columns to existing CSV
 		try:
@@ -305,15 +305,13 @@ def arg_commandline():
 ### Main
 def main():
 	args = arg_commandline()
-	global model
+	global model_quantized
 
 	# Load the Whisper model and processor
 	processor = WhisperProcessor.from_pretrained(MODEL_ID)
-	
+
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print(f"device used: {device}")
-
-	model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID).to(device)
 
 	if args.quantization_bits == 4:
 		model_quantized = WhisperForConditionalGeneration.from_pretrained(
@@ -388,7 +386,7 @@ def main():
 				
 				# Generate token ids
 				with torch.no_grad():
-					predicted_ids = model.generate(inputs.input_features)
+					predicted_ids = model_quantized.generate(inputs.input_features)
 				
 				# Decode token ids to text
 				transcription_with_special = processor.batch_decode(predicted_ids, skip_special_tokens=False)[0]
