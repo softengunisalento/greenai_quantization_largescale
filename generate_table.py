@@ -113,13 +113,16 @@ def read_qd_energy_columns(csv_path, or_sizes_gb, model_label=""):
 	"""Classify each qd_ row as int8/int4 by its OWN sizes_gb ratio against
 	the model's FP32 baseline, not by row position (even/odd).
 
-	Row-position parity (wrapper_rep.py's "-q 4 then -q 8" per repetition)
-	is unreliable in practice: bitsandbytes can silently fall back to
-	8-bit when 4-bit isn't supported (no error raised), and manual top-up
-	runs at different times desync the alternation for files built from
-	multiple separate invocations. bitsandbytes INT8 reports a very
-	consistent ~25% of the FP32 sizes_gb; INT4 packs 2 values/byte so its
-	ratio varies by architecture - only reliably below the INT8 band."""
+	Cluster detection runs FIRST, before the fixed-band heuristic: when a
+	model's qd_ rows split cleanly into exactly two balanced sizes_gb
+	values, that's treated as int4 (smaller) vs int8 (larger) regardless
+	of where those values fall relative to the 22-28% band. This matters
+	for architectures where quantization only touches a small fraction of
+	params (e.g. an LSTM/Conv-heavy model where only the Linear layers get
+	quantized) - both values can land close enough to 25% that the fixed
+	band would swallow both into "int8" and hide a real, if small, int4
+	effect. The fixed band is only the fallback for models with just one
+	size (no quantization effect at all) or an irregular spread of values."""
 	if not csv_path.exists():
 		return [], []
 	with open(csv_path, newline="") as f:
@@ -132,22 +135,40 @@ def read_qd_energy_columns(csv_path, or_sizes_gb, model_label=""):
 	energy_idx = header.index(ENERGY_COL)
 	size_idx = header.index("sizes_gb") if "sizes_gb" in header else None
 
-	int4_vals, int8_vals, unknown = [], [], []
+	parsed = []
 	for row in rows:
-		ratio = None
-		size_val = None
-		if size_idx is not None and or_sizes_gb and size_idx < len(row):
-			try:
-				size_val = float(row[size_idx])
-				ratio = size_val / or_sizes_gb * 100.0
-			except (ValueError, ZeroDivisionError):
-				ratio = None
 		if energy_idx >= len(row):
 			continue
 		try:
 			energy = float(row[energy_idx])
 		except ValueError:
 			continue
+		size_val = None
+		if size_idx is not None and size_idx < len(row):
+			try:
+				size_val = float(row[size_idx])
+			except ValueError:
+				size_val = None
+		parsed.append((size_val, energy))
+
+	if size_idx is not None and or_sizes_gb:
+		by_value = {}
+		for size_val, energy in parsed:
+			if size_val is None:
+				continue
+			by_value.setdefault(size_val, []).append(energy)
+		if len(by_value) == 2:
+			lo_val, hi_val = sorted(by_value)
+			lo_energies, hi_energies = by_value[lo_val], by_value[hi_val]
+			if min(len(lo_energies), len(hi_energies)) >= 0.2 * len(parsed):
+				lo_pct, hi_pct = lo_val / or_sizes_gb * 100.0, hi_val / or_sizes_gb * 100.0
+				if not (22.0 <= lo_pct <= 28.0 and 22.0 <= hi_pct <= 28.0 and abs(hi_pct - lo_pct) < 0.01):
+					print(f"  NOTE [{model_label}]: ratios ({lo_pct:.2f}% / {hi_pct:.2f}%) split cleanly into two balanced clusters - classified by relative size (smaller=int4, larger=int8)")
+					return lo_energies, hi_energies
+
+	int4_vals, int8_vals, unknown = [], [], []
+	for size_val, energy in parsed:
+		ratio = (size_val / or_sizes_gb * 100.0) if (size_val is not None and or_sizes_gb) else None
 		if ratio is None:
 			unknown.append((size_val, energy))
 		elif 22.0 <= ratio <= 28.0:
@@ -156,25 +177,6 @@ def read_qd_energy_columns(csv_path, or_sizes_gb, model_label=""):
 			int4_vals.append(energy)
 		else:
 			unknown.append((size_val, energy))
-
-	# Fallback for architectures where a large non-quantizable fraction
-	# (e.g. big embedding tables bitsandbytes never touches) pushes both
-	# ratios well above the fixed 22-28% INT8 band - only kicks in when the
-	# fixed bands caught nothing at all, and only on a clean, balanced
-	# two-value split (smaller size -> int4, larger -> int8).
-	if not int4_vals and not int8_vals and unknown:
-		by_value = {}
-		for size_val, energy in unknown:
-			if size_val is None:
-				continue
-			by_value.setdefault(size_val, []).append(energy)
-		if len(by_value) == 2:
-			lo_val, hi_val = sorted(by_value)
-			lo_energies, hi_energies = by_value[lo_val], by_value[hi_val]
-			if min(len(lo_energies), len(hi_energies)) >= 0.2 * len(unknown):
-				int4_vals, int8_vals = lo_energies, hi_energies
-				unknown = [(s, e) for s, e in unknown if s not in (lo_val, hi_val)]
-				print(f"  NOTE [{model_label}]: ratios ({lo_val/or_sizes_gb*100:.1f}% / {hi_val/or_sizes_gb*100:.1f}%) fall outside the fixed INT8 band but split cleanly into two balanced clusters - classified by relative size (smaller=int4, larger=int8) instead")
 
 	if unknown:
 		print(f"  WARNING [{model_label}]: {len(unknown)}/{len(rows)} qd_ rows have an unrecognized sizes_gb ratio - excluded from int4/int8")

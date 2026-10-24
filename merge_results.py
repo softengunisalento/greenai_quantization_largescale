@@ -98,8 +98,37 @@ def classify_qd_rows(rows, header, or_sizes_gb, model_label=""):
 	(1 byte/param, same element count). INT4 packs 2 values/byte, so its
 	ratio varies by architecture (which fraction of params are in
 	quantizable Linear layers) - there's no single expected INT4 ratio,
-	only "reliably below the INT8 band"."""
+	only "reliably below the INT8 band".
+
+	Cluster detection runs FIRST, before the fixed-band heuristic: when a
+	model's qd_ rows split cleanly into exactly two balanced sizes_gb
+	values, that's treated as int4 (smaller) vs int8 (larger) regardless
+	of where those values fall relative to the 22-28% band. This matters
+	for architectures where quantization only touches a small fraction of
+	params (e.g. an LSTM/Conv-heavy model where only the Linear layers get
+	quantized) - both values can land close enough to 25% that the fixed
+	band would swallow both into "int8" and hide a real, if small, int4
+	effect. The fixed band is only the fallback for models with just one
+	size (no quantization effect at all) or an irregular spread of values."""
 	size_idx = header.index("sizes_gb") if "sizes_gb" in header else None
+
+	if size_idx is not None and or_sizes_gb:
+		by_value = {}
+		for row in rows:
+			try:
+				val = float(row[size_idx])
+			except (ValueError, IndexError):
+				continue
+			by_value.setdefault(val, []).append(row)
+		if len(by_value) == 2:
+			lo_val, hi_val = sorted(by_value)
+			lo_rows, hi_rows = by_value[lo_val], by_value[hi_val]
+			if min(len(lo_rows), len(hi_rows)) >= 0.2 * len(rows):
+				lo_pct, hi_pct = lo_val / or_sizes_gb * 100.0, hi_val / or_sizes_gb * 100.0
+				if not (22.0 <= lo_pct <= 28.0 and 22.0 <= hi_pct <= 28.0 and abs(hi_pct - lo_pct) < 0.01):
+					print(f"  NOTE [{model_label}]: ratios ({lo_pct:.2f}% / {hi_pct:.2f}%) split cleanly into two balanced clusters - classified by relative size (smaller=int4, larger=int8)")
+					return lo_rows, hi_rows, []
+
 	int4_rows, int8_rows, unknown_rows = [], [], []
 	for row in rows:
 		ratio = None
@@ -116,27 +145,6 @@ def classify_qd_rows(rows, header, or_sizes_gb, model_label=""):
 			int4_rows.append(row)
 		else:
 			unknown_rows.append(row)
-
-	# Fallback for architectures where a large non-quantizable fraction
-	# (e.g. big embedding tables bitsandbytes never touches) pushes both
-	# ratios well above the fixed 22-28% INT8 band - only kicks in when the
-	# fixed bands caught nothing at all, and only on a clean, balanced
-	# two-value split (smaller size -> int4, larger -> int8).
-	if not int4_rows and not int8_rows and unknown_rows and size_idx is not None:
-		by_value = {}
-		for row in unknown_rows:
-			try:
-				val = float(row[size_idx])
-			except (ValueError, IndexError):
-				continue
-			by_value.setdefault(val, []).append(row)
-		if len(by_value) == 2:
-			lo_val, hi_val = sorted(by_value)
-			lo_rows, hi_rows = by_value[lo_val], by_value[hi_val]
-			if min(len(lo_rows), len(hi_rows)) >= 0.2 * len(unknown_rows):
-				int4_rows, int8_rows = lo_rows, hi_rows
-				unknown_rows = [r for r in unknown_rows if r not in lo_rows and r not in hi_rows]
-				print(f"  NOTE [{model_label}]: ratios ({lo_val/or_sizes_gb*100:.1f}% / {hi_val/or_sizes_gb*100:.1f}%) fall outside the fixed INT8 band but split cleanly into two balanced clusters - classified by relative size (smaller=int4, larger=int8) instead")
 
 	if unknown_rows:
 		print(f"  WARNING [{model_label}]: {len(unknown_rows)}/{len(rows)} qd_ rows have an unrecognized sizes_gb ratio (neither ~25% INT8 nor a lower INT4 band) - excluded from both int4/int8 averages")
