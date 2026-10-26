@@ -8,6 +8,7 @@ import pandas as pd
 import csv
 import os
 import time
+import bitsandbytes as bnb
 from tqdm import tqdm
 from codecarbon import EmissionsTracker
 
@@ -69,6 +70,32 @@ def load_validation_images(dataset_id, max_images=500):
 
 	print(f"Found {len(image_data)} image files")
 	return image_data
+
+def quantize_linear_layers(module, quant_type):
+	""" transformers' automatic bnb replacement skips this model's
+	classifier head ("no linear modules were found" warning) and silently
+	falls back to an fp16 cast identical for both -q 4/-q 8 instead of
+	real quantization. Manually swap nn.Linear layers for bitsandbytes
+	equivalents instead, bypassing the skip-list. """
+	for name, child in module.named_children():
+		if isinstance(child, torch.nn.Linear):
+			if quant_type == 4:
+				new_layer = bnb.nn.Linear4bit(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, compute_dtype=torch.float16,
+				)
+			else:
+				new_layer = bnb.nn.Linear8bitLt(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, has_fp16_weights=False,
+				)
+			new_layer.weight.data = child.weight.data
+			if child.bias is not None:
+				new_layer.bias.data = child.bias.data
+			setattr(module, name, new_layer)
+		else:
+			quantize_linear_layers(child, quant_type)
+	return module
 
 def evaluate_size(model):
 	""" Evaluate the size of the model """
@@ -237,20 +264,11 @@ def main():
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print(f"device used: {device}")
 
-	if args.quantization_bits == 4:
-		model_quantized = AutoModelForImageClassification.from_pretrained(
-			MODEL_ID,
-			load_in_4bit=True,
-			device_map=device
-		)
-	elif args.quantization_bits == 8:
-		model_quantized = AutoModelForImageClassification.from_pretrained(
-			MODEL_ID,
-			load_in_8bit=True,
-			device_map=device
-		)
-	else:
+	if args.quantization_bits not in (4, 8):
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
+
+	model_quantized = AutoModelForImageClassification.from_pretrained(MODEL_ID)
+	model_quantized = quantize_linear_layers(model_quantized, args.quantization_bits).to(device)
 
 	# Load images from the validation split
 	print(f"Processing validation split from {DATASET_ID}...")

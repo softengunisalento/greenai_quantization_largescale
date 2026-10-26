@@ -10,6 +10,7 @@ import librosa
 import argparse
 import pandas as pd
 import tempfile
+import bitsandbytes as bnb
 from tqdm import tqdm
 from codecarbon import EmissionsTracker
 
@@ -156,6 +157,31 @@ def evaluate_size(model):
 
 	# return bytes
 	return total_params * N_BYTES
+
+def quantize_linear_layers(module, quant_type):
+	""" pyannote.audio.Model.from_pretrained() doesn't understand
+	load_in_4bit/load_in_8bit/device_map - those kwargs were being
+	silently ignored, so no quantization was ever applied. Manually
+	swap nn.Linear layers for bitsandbytes equivalents instead. """
+	for name, child in module.named_children():
+		if isinstance(child, torch.nn.Linear):
+			if quant_type == 4:
+				new_layer = bnb.nn.Linear4bit(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, compute_dtype=torch.float16,
+				)
+			else:
+				new_layer = bnb.nn.Linear8bitLt(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, has_fp16_weights=False,
+				)
+			new_layer.weight.data = child.weight.data
+			if child.bias is not None:
+				new_layer.bias.data = child.bias.data
+			setattr(module, name, new_layer)
+		else:
+			quantize_linear_layers(child, quant_type)
+	return module
 
 def compute_memory_footprint(model):
 	""" Reimplements HF PreTrainedModel.get_memory_footprint() for models
@@ -322,21 +348,12 @@ def main():
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print(f"device used: {device}")
 
-	if args.quantization_bits == 4:
-		model_quantized = Model.from_pretrained(
-			MODEL_ID,
-			load_in_4bit=True,
-			device_map=device
-		)
-	elif args.quantization_bits == 8:
-		model_quantized = Model.from_pretrained(
-			MODEL_ID,
-			load_in_8bit=True,
-			device_map=device
-		)
-	else:
+	if args.quantization_bits not in (4, 8):
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
-	
+
+	model_quantized = Model.from_pretrained(MODEL_ID)
+	model_quantized = quantize_linear_layers(model_quantized, args.quantization_bits).to(device)
+
 	quantized_inference = Inference(model_quantized)
 	
 	# Extract audio from the specific tar file

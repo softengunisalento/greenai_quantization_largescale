@@ -10,6 +10,7 @@ import time
 import tempfile
 import numpy as np
 import pandas as pd
+import bitsandbytes as bnb
 from tqdm import tqdm
 from codecarbon import EmissionsTracker
 from sklearn.metrics.pairwise import cosine_similarity
@@ -114,6 +115,32 @@ def mean_pooling(model_output, attention_mask):
 	token_embeddings = model_output[0]
 	input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
 	return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+def quantize_linear_layers(module, quant_type):
+	""" trust_remote_code=True custom model classes often don't implement
+	the hooks transformers needs to inject bitsandbytes quantization, so
+	load_in_4bit/load_in_8bit silently no-op (footprint is identical to
+	plain FP32, not even an fp16 downcast). Manually swap nn.Linear
+	layers for bitsandbytes equivalents instead, after loading. """
+	for name, child in module.named_children():
+		if isinstance(child, torch.nn.Linear):
+			if quant_type == 4:
+				new_layer = bnb.nn.Linear4bit(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, compute_dtype=torch.float16,
+				)
+			else:
+				new_layer = bnb.nn.Linear8bitLt(
+					child.in_features, child.out_features,
+					bias=child.bias is not None, has_fp16_weights=False,
+				)
+			new_layer.weight.data = child.weight.data
+			if child.bias is not None:
+				new_layer.bias.data = child.bias.data
+			setattr(module, name, new_layer)
+		else:
+			quantize_linear_layers(child, quant_type)
+	return module
 
 def evaluate_size(model):
 	""" Evaluate the size of the model """
@@ -330,22 +357,11 @@ def main():
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	
 	# Apply dynamic quantization to the model
-	if args.quantization_bits == 4:
-		model_quantized = AutoModel.from_pretrained(
-			MODEL_ID,
-			load_in_4bit=True,
-			device_map="auto",
-			trust_remote_code=True
-		)
-	elif args.quantization_bits == 8:
-		model_quantized = AutoModel.from_pretrained(
-			MODEL_ID,
-			load_in_8bit=True,
-			device_map="auto",
-			trust_remote_code=True
-		)
-	else:
+	if args.quantization_bits not in (4, 8):
 		raise ValueError("Only 4-bit and 8-bit quantization are supported.")
+
+	model_quantized = AutoModel.from_pretrained(MODEL_ID, trust_remote_code=True)
+	model_quantized = quantize_linear_layers(model_quantized, args.quantization_bits).to(device)
 	
 	model_quantized.eval()
 
