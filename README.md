@@ -80,33 +80,60 @@ The evaluation of model quantization highlights significant improvements in mode
 
 ## Results Summary
 
+*Figures below are size/inference-time/energy as a percentage of the FP32 baseline
+(100% = no change, measured on the Test Environment above), pulled directly from
+`merged_results.csv`. Per-model accuracy/MSE figures are not included here — the
+model→metric-label mapping (`old_csv.csv`) used to build them was lost and has not
+been rebuilt; see the full `table.tex` for the aggregate, per-macroclass statistical
+comparison instead.*
+
 ### Feature Extraction and Image Classification
 
-Quantization delivers strong results for **feature extraction tasks**, such as sentence embedding. For example, `BAAI/bge-small-en-v1.5` exhibits only an 8% increase in MSE while achieving an 80% reduction in model size. Similarly, in **image classification** tasks (e.g., `microsoft/resnet-50`), quantization achieves a 75% memory footprint reduction with minimal impact on accuracy, as summarized in Table \[tab\:fea\_iclass].
+**Model size** shrinks predictably under quantization — INT8 always lands at exactly
+25% of FP32 (1 byte/param vs. 4), INT4 varies by architecture (how much of the model
+sits in quantizable `nn.Linear` layers). `microsoft/resnet-50` is the extreme case:
+being almost entirely convolutional, only ~24% of its size is recoverable even under
+INT4, versus the 75–85% typical of Linear-heavy transformer models.
 
-| Model                  | Tasks | INT8 mean MSE | INT4 mean MSE | INT8 Size | INT4 Size |
-| ---------------------- | ----- | ------------- | ------------- | --------- | --------- |
-| BAAI/bge-base-en-v1.5  | FE    | 4.48e-7       | 1.54e-6       | 25.00%    | 15.30%    |
-| BAAI/bge-small-en-v1.5 | FE    | 7.80e-7       | 1.64e-6       | 25.00%    | 17.04%    |
-| microsoft/resnet-50    | IC    | 7.16e-8       | 9.60e-9       | 25.00%    | 25.00%    |
+| Model                  | Tasks | INT8 Size | INT4 Size |
+| ----------------------- | ----- | --------- | --------- |
+| BAAI/bge-base-en-v1.5  | FE    | 25.00%    | 15.30%    |
+| BAAI/bge-small-en-v1.5 | FE    | 25.00%    | 17.04%    |
+| microsoft/resnet-50    | IC    | 25.00%    | 24.00%    |
+
+Size reduction does **not** translate into faster or greener inference on this setup,
+though — see below.
 
 ### Sentence Transformers and Energy Impact
 
-In **sentence similarity** tasks, INT8 quantization offers clear environmental advantages. For several models, energy consumption is reduced by up to 50% with negligible loss in accuracy. `all-mpnet-base-v2`, for example, reduces energy usage to 92.78% while maintaining strong accuracy (Table \[tab\:sen\_tra]).
+Energy impact is mixed and model-dependent, not uniformly favorable. `BAAI/bge-base-en-v1.5`
+genuinely benefits (INT8 drops energy to 62% of FP32); most others show energy roughly
+flat to modestly *higher* under quantization, and `microsoft/resnet-50` is a clear
+outlier at 4.4× FP32 energy under both INT8 and INT4.
 
-| Model             | INT8 mean MSE | INT4 mean MSE | INT8 Energy % | INT4 Energy % |
-| ----------------- | ------------- | ------------- | ------------- | ------------- |
-| all-MiniLM-L6-v2  | 1.18e-7       | 8.43e-7       | 100.06%       | 111.10%       |
-| all-mpnet-base-v2 | 3.09e-7       | 2.17e-7       | 92.78%        | 119.35%       |
-
-### Quantization vs Accuracy
-
-Trade-offs become evident when transitioning from INT8 to INT4. A general trend is observed where INT4 quantization leads to higher MSE—up to 110% increase in some cases (e.g., `BAAI/bge-small-en-v1.5`). This suggests INT4 precision may not be ideal for all models unless accuracy degradation is acceptable. However, INT4 also brings aggressive size reductions, often between **75%–85%**, especially in transformer-based models.
+| Model             | INT8 Energy % | INT4 Energy % |
+| ----------------- | -------------- | -------------- |
+| all-MiniLM-L6-v2  | 111.14%       | 111.89%       |
+| all-mpnet-base-v2 | 89.57%        | 102.75%       |
 
 ### Speed of Inference
 
-The inference speed improvements are **task and architecture dependent**. Quantization generally accelerates vision models (e.g., `resnet-50` improves by 11.6% with INT8 and 38.2% with INT4), while some NLP models experience slowdowns—particularly under INT4—due to hardware dependencies. Notably, the `facebook/opt-125m` model exhibits a 557% speedup with INT8, indicating potential architectural advantages under quantization.
+Inference speed is the sharpest counter-intuitive result in this dataset: quantization
+frequently makes inference **slower**, not faster, on the RTX 4090 test rig —
+consistent with this project's own thesis framing (INT4/INT8 kernel support is
+hardware-dependent, and this GPU is optimized for INT8 tensor-core paths, not every
+bitsandbytes quantized-layer kernel). `microsoft/resnet-50` is the most dramatic case:
+INT8 inference takes **5.85×** FP32's time, INT4 **5.92×** — both clear regressions,
+not improvements. `facebook/opt-125m` similarly regresses (INT8 at 4.94× FP32 time,
+INT4 at 2.44×, better than INT8 but still far slower than unquantized). Smaller
+sentence-transformer models are closer to parity (within ~5–12% either direction).
 
 ### Size vs Performance
 
-Sentence transformers such as `all-MiniLM-L6-v2` show **optimal trade-offs**, achieving **\~75% size reduction** with minimal impact on accuracy or speed. These results make such models excellent candidates for deployment in edge environments or resource-constrained settings.
+The net picture: **size reduction is the one consistently-delivered benefit of
+quantization in this benchmark** — energy and inference-time gains are the exception,
+not the rule, and several models (especially Conv-heavy vision models like resnet-50)
+see both energy and speed get measurably *worse* under both INT8 and INT4. Models
+dominated by `nn.Linear` layers (sentence-transformer/embedding architectures) see the
+largest, most dependable size reductions (75–85%); whether that is worth deploying
+depends on whether size or runtime cost is the actual constraint for a given use case.
