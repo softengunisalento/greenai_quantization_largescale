@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, M2M100ForConditionalGeneration
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import os
@@ -14,7 +14,7 @@ from codecarbon import EmissionsTracker
 ### Constants
 N_BYTES = 1
 CARBON_INTENSITY = 475
-MODEL_ID = "facebook/nllb-200-distilled-600M"
+MODEL_ID = "Helsinki-NLP/opus-mt-tc-big-en-fr"
 DATASET_ID = "bigscience/xP3"
 TMP_FNAME = "bigscience_xP3"
 SPECIFIC_FILE = "xp3_GEM_wiki_lingua_ar_en_test_xp3longwritearticle.jsonl"
@@ -230,13 +230,13 @@ def main():
 	
 	# Apply dynamic quantization to the model
 	if args.quantization_bits == 4:
-		model_quantized = M2M100ForConditionalGeneration.from_pretrained(
+		model_quantized = AutoModelForSeq2SeqLM.from_pretrained(
 			MODEL_ID,
 			load_in_4bit=True,
 			device_map=device
 		)
 	elif args.quantization_bits == 8:
-		model_quantized = M2M100ForConditionalGeneration.from_pretrained(
+		model_quantized = AutoModelForSeq2SeqLM.from_pretrained(
 			MODEL_ID,
 			load_in_8bit=True,
 			device_map=device
