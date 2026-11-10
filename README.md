@@ -2,6 +2,9 @@
 
 This academic thesis investigates the impact of Deep Learning model compression techniques, specifically **post-training** quantization to INT8 and INT4 precision, on both model efficiency and environmental sustainability. The research analyzes a broad selection of models across various tasks like speech processing, computer vision, and text generation, using a GPU-accelerated setup. Key findings highlight the trade-offs between accuracy, model size, inference speed, and energy consumption, revealing that INT4 compression, while reducing model size, can sometimes increase energy usage depending on hardware optimization, such as the NVIDIA RTX 4090 favoring INT8 operations. The study underscores the crucial relationship between hardware capabilities and the effectiveness of quantization techniques in achieving Green AI objectives.
 
+### News
+This paper is in review at Springer Computing.
+
 ---
 
 ## Usage
